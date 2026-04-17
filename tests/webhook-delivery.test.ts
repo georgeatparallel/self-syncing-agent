@@ -1,4 +1,4 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, runInDurableObject, SELF } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
 import { createSync } from "../src/db/syncs";
 import { listSyncErrors } from "../src/db/sync-errors";
@@ -279,5 +279,57 @@ describe("handleWebhookDelivery", () => {
         restore();
       }
     });
+  });
+});
+
+describe("POST /webhook/:userId/:syncId (end-to-end)", () => {
+  it("200s on a correctly-signed request and 401s on a bad signature", async () => {
+    const userId = "e2e-route-user";
+    const stub = env.ChatAgent.get(env.ChatAgent.idFromName(userId));
+
+    // Seed a sync row and install a passthrough fake facets so the
+    // request actually reaches facet.fetch via the route.
+    let syncId = "";
+    await runInDurableObject(stub, async (instance) => {
+      await (
+        instance as never as { setName: (n: string) => Promise<void> }
+      ).setName(userId);
+      syncId = seedSync(instance as never);
+      installFakeFacets(instance, {
+        get() {
+          return {
+            fetch: async () => new Response("ok", { status: 200 }),
+            __supervisorPing: async () => {}
+          };
+        },
+        abort: () => {},
+        delete: () => {}
+      });
+    });
+
+    const body = new TextEncoder().encode('{"action":"create"}');
+    const sig = await hmacHex(body, WEBHOOK_SECRET);
+
+    const good = await SELF.fetch(`http://self/webhook/${userId}/${syncId}`, {
+      method: "POST",
+      headers: { "linear-signature": sig, "content-type": "application/json" },
+      body
+    });
+    expect(good.status).toBe(200);
+
+    const bad = await SELF.fetch(`http://self/webhook/${userId}/${syncId}`, {
+      method: "POST",
+      headers: {
+        "linear-signature": "ab".repeat(32),
+        "content-type": "application/json"
+      },
+      body
+    });
+    expect(bad.status).toBe(401);
+  });
+
+  it("405s on GET /webhook/:userId/:syncId", async () => {
+    const res = await SELF.fetch("http://self/webhook/u/s", { method: "GET" });
+    expect(res.status).toBe(405);
   });
 });

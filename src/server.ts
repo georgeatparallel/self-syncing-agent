@@ -2,6 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { callable, routeAgentRequest } from "agents";
 import { AIChatAgent, type OnChatMessageOptions } from "@cloudflare/ai-chat";
 import { convertToModelMessages, stepCountIs, streamText } from "ai";
+import { Hono } from "hono";
 import { applySchemaMigrations } from "./db/schema";
 import { buildContextMessages } from "./agent/context";
 import { buildTools } from "./agent/tools";
@@ -156,13 +157,47 @@ export class ChatAgent extends AIChatAgent<Env> {
   }
 }
 
+/**
+ * HTTP router. /webhook/:userId/:syncId is handled directly; everything
+ * else falls through to the Agents SDK (chat, MCP, WebSocket upgrade).
+ * Keeping Agents SDK as the catch-all (rather than mounting it under a
+ * prefix) matches the default template we started from.
+ */
+const app = new Hono<{ Bindings: Env }>();
+
+app.post("/webhook/:userId/:syncId", async (c) => {
+  const { userId, syncId } = c.req.param();
+  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+  const bodyBytes = await c.req.arrayBuffer();
+  const signatureHex = c.req.header("linear-signature") ?? null;
+  const result = await stub.handleWebhookDelivery(
+    syncId,
+    bodyBytes,
+    signatureHex
+  );
+  // `new Response` instead of `c.text(body, status)` because Hono's
+  // helpers type `status` as its `StatusCode` union — our RPC return
+  // is a plain `number`, and widening the cast at every return site
+  // is noisier than constructing the Response directly.
+  return new Response(result.body, { status: result.status });
+});
+
+// Any non-POST method on the webhook path → 405. Hono evaluates route
+// registrations in order, so this `.all(...)` only fires when the more
+// specific `.post(...)` above has already rejected the method.
+app.all("/webhook/:userId/:syncId", (c) =>
+  c.text("method not allowed", 405, { Allow: "POST" })
+);
+
+// Fallthrough: everything else (chat WebSocket upgrade, MCP, etc.)
+// goes to the Agents SDK router.
+app.all("*", async (c) => {
+  const res = await routeAgentRequest(c.req.raw, c.env);
+  return res ?? c.text("Not found", 404);
+});
+
 export default {
-  async fetch(request: Request, env: Env) {
-    return (
-      (await routeAgentRequest(request, env)) ||
-      new Response("Not found", { status: 404 })
-    );
-  }
+  fetch: app.fetch
 } satisfies ExportedHandler<Env>;
 
 /**
