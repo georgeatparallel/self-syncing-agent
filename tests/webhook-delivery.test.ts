@@ -103,12 +103,18 @@ describe("handleWebhookDelivery", () => {
         const res = await (
           instance as never as {
             handleWebhookDelivery: (
+              userId: string,
               id: string,
               body: ArrayBuffer,
               sig: string | null
             ) => Promise<{ status: number; body: string }>;
           }
-        ).handleWebhookDelivery(syncId, body.buffer as ArrayBuffer, sig);
+        ).handleWebhookDelivery(
+          "wh-happy",
+          syncId,
+          body.buffer as ArrayBuffer,
+          sig
+        );
         expect(res.status).toBe(200);
         expect(received).toHaveLength(1);
         expect(new TextDecoder().decode(received[0])).toBe(
@@ -131,12 +137,14 @@ describe("handleWebhookDelivery", () => {
       const res = await (
         instance as never as {
           handleWebhookDelivery: (
+            userId: string,
             id: string,
             body: ArrayBuffer,
             sig: string | null
           ) => Promise<{ status: number; body: string }>;
         }
       ).handleWebhookDelivery(
+        "wh-404",
         "00000000-0000-0000-0000-000000000000",
         body.buffer as ArrayBuffer,
         sig
@@ -156,12 +164,18 @@ describe("handleWebhookDelivery", () => {
       const res = await (
         instance as never as {
           handleWebhookDelivery: (
+            userId: string,
             id: string,
             body: ArrayBuffer,
             sig: string | null
           ) => Promise<{ status: number; body: string }>;
         }
-      ).handleWebhookDelivery(syncId, body.buffer as ArrayBuffer, null);
+      ).handleWebhookDelivery(
+        "wh-nosig",
+        syncId,
+        body.buffer as ArrayBuffer,
+        null
+      );
       expect(res.status).toBe(401);
     });
   });
@@ -181,12 +195,18 @@ describe("handleWebhookDelivery", () => {
       const res = await (
         instance as never as {
           handleWebhookDelivery: (
+            userId: string,
             id: string,
             body: ArrayBuffer,
             sig: string | null
           ) => Promise<{ status: number; body: string }>;
         }
-      ).handleWebhookDelivery(syncId, body.buffer as ArrayBuffer, wrongSig);
+      ).handleWebhookDelivery(
+        "wh-badsig",
+        syncId,
+        body.buffer as ArrayBuffer,
+        wrongSig
+      );
       expect(res.status).toBe(401);
     });
   });
@@ -218,12 +238,18 @@ describe("handleWebhookDelivery", () => {
         const res = await (
           instance as never as {
             handleWebhookDelivery: (
+              userId: string,
               id: string,
               body: ArrayBuffer,
               sig: string | null
             ) => Promise<{ status: number; body: string }>;
           }
-        ).handleWebhookDelivery(syncId, body.buffer as ArrayBuffer, sig);
+        ).handleWebhookDelivery(
+          "wh-throws",
+          syncId,
+          body.buffer as ArrayBuffer,
+          sig
+        );
         expect(res.status).toBe(500);
 
         const sql = (
@@ -265,12 +291,18 @@ describe("handleWebhookDelivery", () => {
         const res = await (
           instance as never as {
             handleWebhookDelivery: (
+              userId: string,
               id: string,
               body: ArrayBuffer,
               sig: string | null
             ) => Promise<{ status: number; body: string }>;
           }
-        ).handleWebhookDelivery(syncId, body.buffer as ArrayBuffer, sig);
+        ).handleWebhookDelivery(
+          "wh-facet500",
+          syncId,
+          body.buffer as ArrayBuffer,
+          sig
+        );
         expect(res.status).toBe(500);
         const sql = (
           instance as never as { sql: (...a: unknown[]) => unknown }

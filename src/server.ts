@@ -56,7 +56,14 @@ export class ChatAgent extends AIChatAgent<Env> {
     });
   }
 
+  // userId is taken from the URL path by the webhook route, not from
+  // this.name — the webhook path reaches the DO via direct RPC and
+  // bypasses the Agents SDK routing that normally calls setName().
+  // On a cold-started instance (webhook delivery after DO hibernated),
+  // this.name throws. Accepting userId as a parameter keeps this method
+  // self-contained and avoids depending on SDK name-hydration behavior.
   async handleWebhookDelivery(
+    userId: string,
     syncId: string,
     bodyBytes: ArrayBuffer,
     signatureHex: string | null
@@ -73,7 +80,6 @@ export class ChatAgent extends AIChatAgent<Env> {
       return { status: 401, body: "invalid signature" };
     }
 
-    const userId = this.name;
     const facet = attachFacet(this.env, this.ctx.facets, sync, userId);
 
     // Rebuild a minimal Request for the facet. Agent handlers read the
@@ -171,6 +177,7 @@ app.post("/webhook/:userId/:syncId", async (c) => {
   const bodyBytes = await c.req.arrayBuffer();
   const signatureHex = c.req.header("linear-signature") ?? null;
   const result = await stub.handleWebhookDelivery(
+    userId,
     syncId,
     bodyBytes,
     signatureHex
