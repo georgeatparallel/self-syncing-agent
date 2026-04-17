@@ -23,7 +23,6 @@ Non-goals recap: multi-tenant auth, user OAuth flows, teams, billing, multi-thre
 
 ## 2. Stack summary
 
-
 | Concern         | Choice                                                                                           |
 | --------------- | ------------------------------------------------------------------------------------------------ |
 | Runtime         | Cloudflare Workers + Durable Objects                                                             |
@@ -36,12 +35,11 @@ Non-goals recap: multi-tenant auth, user OAuth flows, teams, billing, multi-thre
 | Package manager | pnpm                                                                                             |
 | Node            | 22.x (pinned `.nvmrc` + `package.json#engines`)                                                  |
 
-
 ## 3. Identity and addressing
 
 - **No auth.** Every visitor gets a client-minted UUID on first landing, stored in `localStorage`.
 - **URL pattern:** `/user/:userId` is that visitor's agent page. The URL is the capability — sharing the URL shares the agent.
-- **DO naming:** `env.USER_AGENT.idFromName(userId)` — the DO is created on first access. No server-side user registry; the DO existing *is* the user record.
+- **DO naming:** `env.USER_AGENT.idFromName(userId)` — the DO is created on first access. No server-side user registry; the DO existing _is_ the user record.
 
 ## 4. Topology
 
@@ -81,8 +79,6 @@ flowchart TD
     GitHub -- webhook POST /webhook/:uid/:sid --> Worker
 ```
 
-
-
 **Facet isolation semantics** (confirmed from Cloudflare docs):
 
 - A single DO can host an arbitrary number of named facets (`ctx.facets.get("name", ...)`)
@@ -96,16 +92,15 @@ flowchart TD
 
 Lives in the user DO. Accessed via `this.sql` (Agents SDK).
 
-`**chat_messages`** — inherited from `AIChatAgent`. Messages persisted across reloads and dev restarts.
+`**chat_messages`\*\* — inherited from `AIChatAgent`. Messages persisted across reloads and dev restarts.
 
 `**syncs**` — the registry:
 
-
 | Column                | Type                       | Notes                                                                 |
-| --------------------- | -------------------------- | --------------------------------------------------------------------- |
+| --------------------- | -------------------------- | --------------------------------------------------------------------- | --------------- |
 | `id`                  | TEXT PRIMARY KEY           | UUID generated at creation                                            |
 | `name`                | TEXT NOT NULL UNIQUE       | User-visible label; must be unique per user                           |
-| `integration`         | TEXT NOT NULL              | `"linear"` | `"github"` (V1)                                          |
+| `integration`         | TEXT NOT NULL              | `"linear"`                                                            | `"github"` (V1) |
 | `handler_code`        | TEXT NOT NULL              | Agent-authored JS; module source                                      |
 | `schema_ddl`          | TEXT NOT NULL              | Agent-authored SQL DDL; run in facet on init                          |
 | `filter_description`  | TEXT                       | Human-readable description of what this sync tracks                   |
@@ -116,9 +111,7 @@ Lives in the user DO. Accessed via `this.sql` (Agents SDK).
 | `created_at`          | INTEGER NOT NULL           | Unix ms                                                               |
 | `updated_at`          | INTEGER NOT NULL           | Unix ms                                                               |
 
-
 `**sync_errors**` — runtime failure log:
-
 
 | Column            | Type                              | Notes                                                          |
 | ----------------- | --------------------------------- | -------------------------------------------------------------- |
@@ -129,7 +122,6 @@ Lives in the user DO. Accessed via `this.sql` (Agents SDK).
 | `error_message`   | TEXT NOT NULL                     | `e.message`                                                    |
 | `stack_trace`     | TEXT                              | `e.stack` if available                                         |
 | `handler_version` | INTEGER NOT NULL                  | The version that failed; older errors preserved across updates |
-
 
 `**connections**` — **V2 only.** Per-user Pipedream account bindings. Skipped for V1.
 
@@ -206,19 +198,16 @@ interface CredentialSource {
 
 ### 8.1 Read tools (no approval)
 
-
-| Tool                                     | Input                                     | Output                                                                           | Notes                                              |
-| ---------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `list_syncs()`                           | —                                         | `[{sync_id, name, integration, row_count, version, last_activity}]`              | Rich detail for the sync list UI                   |
-| `get_sync(sync_id)`                      | `sync_id: string`                         | `{handler_code, schema_ddl, version, recent_activity, row_count, recent_errors}` | Full sync detail                                   |
-| `get_sync_errors(sync_id, limit=20)`     | `sync_id`, `limit`                        | `[sync_error rows]`                                                              | Full stack traces + payload previews for debugging |
-| `query_sync(sync_id, sql)`               | `sync_id`, `sql: string`                  | `rows[]`                                                                         | **SELECT-only**; enforced in the facet             |
-| `get_integration_docs(integration)`      | `"linear"` | `"github"`                   | `{webhook_events: [...], api_base_url, auth_pattern, common_gotchas}`            | Curated JSON bundles in the worker                 |
-| `web_search(objective, search_queries?)` | `objective: string`, `queries?: string[]` | `[{url, title, excerpt, ...}]`                                                   | Parallel AI agentic mode; 10 results; 4KB excerpts |
-
+| Tool                                     | Input                                     | Output                                                                           | Notes                                                                 |
+| ---------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------- |
+| `list_syncs()`                           | —                                         | `[{sync_id, name, integration, row_count, version, last_activity}]`              | Rich detail for the sync list UI                                      |
+| `get_sync(sync_id)`                      | `sync_id: string`                         | `{handler_code, schema_ddl, version, recent_activity, row_count, recent_errors}` | Full sync detail                                                      |
+| `get_sync_errors(sync_id, limit=20)`     | `sync_id`, `limit`                        | `[sync_error rows]`                                                              | Full stack traces + payload previews for debugging                    |
+| `query_sync(sync_id, sql)`               | `sync_id`, `sql: string`                  | `rows[]`                                                                         | **SELECT-only**; enforced in the facet                                |
+| `get_integration_docs(integration)`      | `"linear"`                                | `"github"`                                                                       | `{webhook_events: [...], api_base_url, auth_pattern, common_gotchas}` | Curated JSON bundles in the worker |
+| `web_search(objective, search_queries?)` | `objective: string`, `queries?: string[]` | `[{url, title, excerpt, ...}]`                                                   | Parallel AI agentic mode; 10 results; 4KB excerpts                    |
 
 ### 8.2 Write tools (always approval via Agents SDK `needsApproval`)
-
 
 | Tool          | Input                                                               | Output                   | Side effects                                                                                                                                            |
 | ------------- | ------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -227,8 +216,7 @@ interface CredentialSource {
 | `delete_sync` | `sync_id: string`                                                   | `{ok: true}`             | Unregisters upstream webhook, drops facet, deletes sync record + related errors.                                                                        |
 | `run_in_sync` | `sync_id: string, code: string`                                     | `{result, logs, error?}` | Loads the code into the target sync's facet at a one-shot `/exec` entrypoint. Same isolation as the handler. Enables backfill, diagnostics, data fixes. |
 
-
-**Approval rationale:** every write tool always requires approval (no heuristic classification). The approval moment *is* the "show generated code" UI moment, so this matches the assignment's UX ask naturally.
+**Approval rationale:** every write tool always requires approval (no heuristic classification). The approval moment _is_ the "show generated code" UI moment, so this matches the assignment's UX ask naturally.
 
 ## 9. LLM context injection (caching-aware)
 
@@ -325,8 +313,6 @@ sequenceDiagram
     Agent-->>User: "Sync linear_bugs is live"
 ```
 
-
-
 **Rollback rules** — if any step after webhook registration fails (facet load, init, registry write), the supervisor unregisters the Linear webhook and drops the facet, returning an error message that the agent surfaces to the user.
 
 ### 10.2 Webhook delivery (steady state)
@@ -361,8 +347,6 @@ sequenceDiagram
     end
 ```
 
-
-
 **Signature verification stays in the supervisor** — facet code never sees `webhook_secret`. Facets receive the fully validated request with raw body.
 
 ### 10.3 Query
@@ -381,8 +365,8 @@ Trivial; covered in prose:
 
 ### 11.1 Layer 1 — prevention (at code-generation time)
 
-- `**get_integration_docs(integration)`** — V1 ships curated JSON bundles for Linear and GitHub. Includes webhook event types, payload schemas, sample payloads, auth patterns, and common gotchas. Small enough to read every session.
-- `**web_search` (Parallel)** — fallback for unknown integrations, recent API changes, error-code lookup, general research.
+- `**get_integration_docs(integration)`\*\* — V1 ships curated JSON bundles for Linear and GitHub. Includes webhook event types, payload schemas, sample payloads, auth patterns, and common gotchas. Small enough to read every session.
+- `**web_search` (Parallel)\*\* — fallback for unknown integrations, recent API changes, error-code lookup, general research.
 - **System prompt discipline** — "Before writing a handler, call `get_integration_docs` to get the webhook payload schema. Write code against the documented shape. Do not guess at field names."
 
 ### 11.2 Layer 2 — recovery (at runtime)
@@ -442,7 +426,6 @@ Per-session message cap on the public URL to prevent LLM-cost abuse. Not V1.
 
 ## 15. Worker env secrets
 
-
 | Secret                                            | Purpose                                                  | Notes                                   |
 | ------------------------------------------------- | -------------------------------------------------------- | --------------------------------------- |
 | `ANTHROPIC_API_KEY`                               | Claude LLM calls                                         | Read directly by supervisor             |
@@ -450,7 +433,6 @@ Per-session message cap on the public URL to prevent LLM-cost abuse. Not V1.
 | `LINEAR_API_KEY`                                  | Linear API auth (webhook registration + proxy injection) | V1 uses one shared demo-workspace token |
 | `GITHUB_TOKEN`                                    | GitHub API auth                                          | V1 uses one shared demo-account token   |
 | `PIPEDREAM_CLIENT_ID` / `PIPEDREAM_CLIENT_SECRET` | Pipedream Connect                                        | V2 only                                 |
-
 
 All provisioned via `wrangler secret put <NAME>` for deployed environments. Local dev reads from `.dev.vars` (gitignored).
 

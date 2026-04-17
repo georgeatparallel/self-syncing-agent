@@ -5,7 +5,7 @@
 
 ## The problem
 
-People's work lives are scattered across dozens of services: Linear, GitHub, Slack, Notion, Gmail, Calendar, and so on. For an agent to be genuinely useful, that data needs to be *front and centre* — queryable in milliseconds, filterable, cross-referenceable, and available without the agent having to re-fetch it from a slow third-party API every time it wants to think.
+People's work lives are scattered across dozens of services: Linear, GitHub, Slack, Notion, Gmail, Calendar, and so on. For an agent to be genuinely useful, that data needs to be _front and centre_ — queryable in milliseconds, filterable, cross-referenceable, and available without the agent having to re-fetch it from a slow third-party API every time it wants to think.
 
 There are lots of ways to solve this. The one we want to experiment with, and the one this trial is about, is: **have the agent write the code that syncs the data itself.** This is the code-mode/bitter lesson pilled way to get things done. 
 
@@ -133,11 +133,11 @@ Both are nice-to-haves; the CTO explicitly said architecture is what's being jud
 
 Reference this when designing. The agent only runs in phases 1 and 3 — phase 2 is code-only.
 
-| Phase | Agent runs? | LLM cost? | What happens |
-|---|---|---|---|
-| **1. Setup** | Yes | Yes | User asks for a sync → agent designs schema, writes handler JS, deploys Facet, registers webhook upstream. |
-| **2. Steady state** | **No** | **No** | Upstream fires webhook → Facet handler (agent-written code) runs → writes row to its own SQLite → sleeps. |
-| **3. Query** | Yes | Yes | User asks a question → agent runs SQL against Facet SQLite → LLM reads rows → answers. |
+| Phase               | Agent runs? | LLM cost? | What happens                                                                                               |
+| ------------------- | ----------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| **1. Setup**        | Yes         | Yes       | User asks for a sync → agent designs schema, writes handler JS, deploys Facet, registers webhook upstream. |
+| **2. Steady state** | **No**      | **No**    | Upstream fires webhook → Facet handler (agent-written code) runs → writes row to its own SQLite → sleeps.  |
+| **3. Query**        | Yes         | Yes       | User asks a question → agent runs SQL against Facet SQLite → LLM reads rows → answers.                     |
 
 ## Principles we're optimizing for
 

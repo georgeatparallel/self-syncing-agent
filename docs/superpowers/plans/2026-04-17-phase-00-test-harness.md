@@ -103,11 +103,11 @@ export default defineWorkersConfig({
         singleWorker: true,
         wrangler: { configPath: "./wrangler.jsonc" },
         miniflare: {
-          compatibilityFlags: ["nodejs_compat"],
-        },
-      },
-    },
-  },
+          compatibilityFlags: ["nodejs_compat"]
+        }
+      }
+    }
+  }
 });
 ```
 
@@ -146,10 +146,7 @@ Replace the whole file with:
 {
   "extends": "agents/tsconfig",
   "compilerOptions": {
-    "types": [
-      "@cloudflare/workers-types",
-      "@cloudflare/vitest-pool-workers"
-    ]
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers"]
   },
   "include": ["src", "tests", "env.d.ts", "vitest.config.ts"]
 }
@@ -190,7 +187,9 @@ import { describe, it, expect } from "vitest";
 
 describe("worker harness smoke test", () => {
   it("responds with 404 to an unknown route", async () => {
-    const response = await SELF.fetch("https://example.com/this-path-does-not-exist");
+    const response = await SELF.fetch(
+      "https://example.com/this-path-does-not-exist"
+    );
 
     expect(response.status).toBe(404);
     const body = await response.text();

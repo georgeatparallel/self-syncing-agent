@@ -1,5 +1,6 @@
 import { Suspense, useCallback, useState, useEffect, useRef } from "react";
 import { useAgent } from "agents/react";
+import { getOrMintUserId, userIdFromPath, userPath } from "./identity";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import type { MCPServersState } from "agents";
@@ -242,8 +243,21 @@ function Chat() {
   const [isAddingServer, setIsAddingServer] = useState(false);
   const mcpPanelRef = useRef<HTMLDivElement>(null);
 
+  // Resolve the userId exactly once per mount. If we're at /, redirect to /user/<id>
+  // so the URL is shareable. useState with a lazy initializer ensures this runs
+  // once (before useAgent sees it) and stays stable across re-renders.
+  const [userId] = useState(() => {
+    const fromUrl = userIdFromPath(window.location.pathname);
+    const resolved = getOrMintUserId(fromUrl);
+    if (window.location.pathname !== userPath(resolved)) {
+      window.history.replaceState({}, "", userPath(resolved));
+    }
+    return resolved;
+  });
+
   const agent = useAgent<ChatAgent>({
     agent: "ChatAgent",
+    name: userId,
     onOpen: useCallback(() => setConnected(true), []),
     onClose: useCallback(() => setConnected(false), []),
     onError: useCallback(

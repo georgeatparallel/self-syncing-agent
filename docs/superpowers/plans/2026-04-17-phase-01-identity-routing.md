@@ -28,10 +28,12 @@ No changes to `src/server.ts` — the starter's `routeAgentRequest(request, env)
 ## Task 1: Dependency hygiene (unblock `pnpm run check`, stabilize versions)
 
 This task addresses two concerns carried over from Phase 00's code review:
+
 - The pre-existing `@oxfmt/binding-darwin-arm64` optional-dep failure (same pnpm bug pattern as rolldown).
 - The caret-versioned `@cloudflare/vitest-pool-workers` could drift on `0.12.x` patch bumps; pin exact.
 
 **Files:**
+
 - Modify: `package.json` (devDependencies)
 - Modify: `pnpm-lock.yaml` (via install)
 
@@ -89,6 +91,7 @@ If `oxfmt` still fails: the binding version may have drifted. Look at `ls node_m
 Carried over from Phase 00's code review: Phase 02+ tests will instantiate the DO, which invokes `onChatMessage`, which reads `env.ANTHROPIC_API_KEY`. Without a test override, CI environments without `.dev.vars` produce confusing failures. This task costs nothing and prevents that.
 
 **Files:**
+
 - Modify: `vitest.config.ts`
 
 - [ ] **Step 1: Add `bindings` override to the miniflare config**
@@ -111,12 +114,12 @@ export default defineWorkersConfig({
             // Stub secret for tests. Real value comes from .dev.vars in dev
             // and `wrangler secret put` in prod. Tests that need to simulate
             // real LLM calls should mock the Anthropic SDK explicitly.
-            ANTHROPIC_API_KEY: "test-stub-key",
-          },
-        },
-      },
-    },
-  },
+            ANTHROPIC_API_KEY: "test-stub-key"
+          }
+        }
+      }
+    }
+  }
 });
 ```
 
@@ -135,6 +138,7 @@ Expected: still 1/1 passing (the smoke test doesn't use the key, so this is pure
 This module is three pure functions + one constant. We TDD it because the logic is small, localized, and the test cost is low.
 
 **Files:**
+
 - Create: `src/identity.ts`
 - Create: `src/identity.test.ts`
 
@@ -144,7 +148,12 @@ Create `src/identity.test.ts` with exactly this content:
 
 ```ts
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { USER_ID_KEY, getOrMintUserId, userIdFromPath, userPath } from "./identity";
+import {
+  USER_ID_KEY,
+  getOrMintUserId,
+  userIdFromPath,
+  userPath
+} from "./identity";
 
 function mockLocalStorage() {
   const store = new Map<string, string>();
@@ -156,7 +165,7 @@ function mockLocalStorage() {
     get length() {
       return store.size;
     },
-    key: (i: number) => Array.from(store.keys())[i] ?? null,
+    key: (i: number) => Array.from(store.keys())[i] ?? null
   };
 }
 
@@ -170,8 +179,9 @@ describe("identity", () => {
   describe("userIdFromPath", () => {
     it("extracts a userId from /user/:id paths", () => {
       expect(userIdFromPath("/user/abc-123")).toBe("abc-123");
-      expect(userIdFromPath("/user/6a2c9b1e-ff01-4d3e-9c10-aabbccddeeff"))
-        .toBe("6a2c9b1e-ff01-4d3e-9c10-aabbccddeeff");
+      expect(userIdFromPath("/user/6a2c9b1e-ff01-4d3e-9c10-aabbccddeeff")).toBe(
+        "6a2c9b1e-ff01-4d3e-9c10-aabbccddeeff"
+      );
     });
 
     it("strips a trailing slash", () => {
@@ -203,7 +213,9 @@ describe("identity", () => {
 
     it("mints a new UUID when none is stored and returns it", () => {
       const id = getOrMintUserId();
-      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+      expect(id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      );
       expect(storage.getItem(USER_ID_KEY)).toBe(id);
     });
 
@@ -291,12 +303,14 @@ Expected: all tests in both `tests/smoke.test.ts` and `src/identity.test.ts` pas
 ## Task 4: Wire `userId` into `app.tsx` and handle URL routing
 
 Now we use the identity module from React. The app, on mount:
+
 1. Reads `location.pathname`.
 2. If it matches `/user/:id`, uses that id.
 3. Otherwise mints/reads from localStorage and calls `history.replaceState` to land on `/user/<id>`.
 4. Passes the resolved `userId` as the `name` parameter to `useAgent`.
 
 **Files:**
+
 - Modify: `src/app.tsx` — specifically the `useAgent` call and top-of-component setup.
 
 - [ ] **Step 1: Add the identity import and userId resolution**
@@ -357,6 +371,7 @@ pnpm dev
 ```
 
 In a browser, open `http://localhost:5173/`. Expected:
+
 1. URL bar immediately rewrites to `http://localhost:5173/user/<uuid>` (no navigation history entry).
 2. Chat connects ("Connected" badge appears).
 3. Refresh the page — same userId persists (URL unchanged; localStorage has it).
@@ -371,6 +386,7 @@ Kill dev (`Ctrl-C`) when done. This is a sanity check, not an automated gate.
 Proves the substrate works: two different userIds get isolated DOs. This test anchors the whole "one user = one DO" invariant for the rest of the build.
 
 **Files:**
+
 - Create: `tests/per-user-do.test.ts`
 
 - [ ] **Step 1: Write the integration test**
@@ -411,6 +427,7 @@ This gives us the ID-stability invariant for Phase 01; **richer SQLite-state-iso
 ## Task 6: Commit and push
 
 **Files:**
+
 - All Phase 01 changes: `package.json`, `pnpm-lock.yaml`, `vitest.config.ts`, `src/identity.ts`, `src/identity.test.ts`, `src/app.tsx`, `tests/per-user-do.test.ts`.
 
 - [ ] **Step 1: Stage and verify nothing extra is included**
