@@ -4,6 +4,7 @@ import { getSyncErrorsTool } from "./read/get-sync-errors";
 import { querySyncTool } from "./read/query-sync";
 import { webSearchTool } from "./read/web-search";
 import { createSyncTool } from "./write/create-sync";
+import { deleteSyncTool } from "./write/delete-sync";
 import type { ChatAgent } from "../../server";
 
 /**
@@ -13,7 +14,8 @@ import type { ChatAgent } from "../../server";
  *
  * Write tools added progressively from Phase 08 onwards:
  * - create_sync (Phase 08, live)
- * - update_sync, delete_sync, run_in_sync (Phase 10+)
+ * - delete_sync (Phase 10, live)
+ * - update_sync, run_in_sync (later phases)
  */
 export function buildTools(agent: ChatAgent) {
   return {
@@ -22,6 +24,7 @@ export function buildTools(agent: ChatAgent) {
     get_sync_errors: getSyncErrorsTool(agent),
     query_sync: querySyncTool(agent),
     web_search: webSearchTool(agent),
-    create_sync: createSyncTool(agent)
+    create_sync: createSyncTool(agent),
+    delete_sync: deleteSyncTool(agent)
   };
 }

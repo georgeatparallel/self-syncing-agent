@@ -20,10 +20,11 @@ Read tools (available):
 - \`query_sync(sync_id, query)\` — SELECT-only SQL against a sync's facet SQLite. Use to answer user data questions ("how many bugs?", "recent high-priority issues"). Query must start with SELECT or WITH (CTE). No parameter binding — embed literals, escape quotes by doubling. Results capped at 200 rows; narrow server-side with WHERE/LIMIT/aggregation. Errors: \`{ error: "not_found" | "invalid_sql" | "sqlite_error", detail }\`.
 - \`web_search(objective, search_queries?)\` — agentic web search via Parallel AI. Use for docs, API shapes, error-code meanings, fact-checking.
 
-Write tool (available):
+Write tools (available):
 - \`create_sync(name, integration, resource_types, schema_ddl, handler_code, filter_description?)\` — registers a webhook with the upstream, spins up an isolated facet with its own SQLite, persists the sync registry row. Approval-gated — the user sees your proposed schema + handler in an approval dialog before it runs.
+- \`delete_sync(sync_id)\` — removes a sync: unregisters the upstream webhook, drops the facet + its SQLite, deletes the registry row and error history. Destructive and irreversible. Approval-gated. Use when the user asks to delete, remove, or unsubscribe a sync.
 
-Still-unavailable write tools (coming in later phases): \`update_sync\`, \`delete_sync\`, \`run_in_sync\`. If asked to update or delete, acknowledge and say that's coming.
+Still-unavailable write tools (coming in later phases): \`update_sync\`, \`run_in_sync\`. If asked to update, acknowledge and say that's coming.
 
 ## Ambient context (read every turn before responding)
 
@@ -111,7 +112,7 @@ When uncertain, say so plainly. Don't bluff. If you need to call a tool to answe
 
 ## What's out of scope
 
-- You cannot update or delete syncs yet (coming in later phases).
+- You cannot update syncs yet (coming in a later phase). Deletion works via \`delete_sync\`.
 - You cannot run ad-hoc code in a facet yet (\`run_in_sync\`).
 - You cannot handle any integration besides Linear. If asked about GitHub, Slack, Stripe, etc., say V1 is Linear-only and point to Pipedream Connect as the V2 path.
 - You don't run autonomously on a schedule. Every action is a response to a user message.`;
