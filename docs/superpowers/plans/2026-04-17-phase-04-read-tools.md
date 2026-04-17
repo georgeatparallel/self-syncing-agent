@@ -6,7 +6,7 @@
 
 **Architecture:** `server.ts` shrinks to a thin `ChatAgent` class that orchestrates pre-built pieces. System prompt, context messages, tool registry, and each tool live in their own modules under `src/agent/`. The pattern mirrors a lightweight version of the LangGraph `NodeConfig` decomposition, without creating a generic config class (YAGNI for one agent).
 
-**Tech Stack:** TypeScript, `ai` SDK `tool()` helper, Zod schemas, Parallel AI REST API via bare `fetch()`.
+**Tech Stack:** TypeScript, `ai` SDK `tool()` helper, Zod schemas, **`parallel-web`** (official Parallel AI TypeScript SDK, zero runtime deps, Workers-compatible).
 
 **Reference:** [`docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md`](../specs/2026-04-17-self-syncing-agent-architecture-design.md) §8 (read tools), §9 (context injection), §11.1 (web_search as Layer-1 prevention).
 
@@ -44,24 +44,36 @@
 
 Tool files import the `ChatAgent` type from `src/server.ts`. `src/server.ts` imports `buildTools` from `src/agent/tools/index.ts`. This is a runtime cycle if we import values, but TypeScript's `import type` statements are erased at runtime, so cycles via `import type { ChatAgent } from "../../../server"` are safe. Use type-only imports everywhere tool files reference `ChatAgent`.
 
-### Parallel AI API shape
+### Parallel AI via `parallel-web` SDK
 
-Confirmed from the user's existing Python code:
+Using the official TypeScript SDK (`parallel-web@^0.3.2`). Zero runtime deps (uses native `fetch`), Workers-compatible.
 
-```
-POST https://api.parallel.ai/v1beta/search
-Headers: x-api-key: <key>, content-type: application/json
-Body: {
-  objective: string,
-  search_queries?: string[],
-  max_results: 10,
+```ts
+import Parallel, { APIError } from "parallel-web";
+
+const client = new Parallel({ apiKey: env.PARALLEL_API_KEY });
+
+const result = await client.beta.search({
+  objective: "...",
+  search_queries: ["q1", "q2"] ?? null,   // optional
+  mode: "agentic",                          // or "fast"
   excerpts: { max_chars_per_result: 4000 },
-  mode: "agentic"
-}
-Response: { results: [{ url, title, excerpts: [string], ... }] }
+});
+
+// Typed result:
+// {
+//   search_id: string,
+//   results: WebSearchResult[],   // each has { url, title?, excerpts?, publish_date? }
+//   usage?, warnings?
+// }
 ```
 
-We call this with bare `fetch()` — no new npm dep. If the real response shape differs slightly at runtime, the tool's execute function adapts.
+Typed errors: `APIError`, `AuthenticationError`, `RateLimitError`, `InternalServerError`, etc. — all extend `ParallelError`.
+
+Why the SDK over bare fetch:
+- Typed request + response (no hand-rolled interfaces that drift from API)
+- Typed error subclasses (we can surface rate-limit/auth errors distinctly)
+- Free upgrade path when Parallel ships new fields or endpoints
 
 ### SDK tool shape
 
@@ -81,12 +93,20 @@ For Phase 04, all tools have `execute` (server-side). No `needsApproval` — the
 
 ---
 
-## Task 1: Add `PARALLEL_API_KEY` wiring
+## Task 1: Install `parallel-web` SDK + wire `PARALLEL_API_KEY`
 
 **Files:**
-- Modify: `.dev.vars.example`, `.dev.vars`, `vitest.config.ts`, `env.d.ts` (regenerated)
+- Modify: `package.json`, `pnpm-lock.yaml`, `.dev.vars.example`, `.dev.vars`, `vitest.config.ts`, `env.d.ts` (regenerated)
 
-- [ ] **Step 1: Add to `.dev.vars.example`**
+- [ ] **Step 1: Install the Parallel SDK**
+
+```bash
+pnpm add parallel-web
+```
+
+Expected: `parallel-web` lands in `dependencies` (latest ^0.3.x, zero runtime deps).
+
+- [ ] **Step 2: Add to `.dev.vars.example`**
 
 Append to `.dev.vars.example`:
 
@@ -94,7 +114,7 @@ Append to `.dev.vars.example`:
 PARALLEL_API_KEY=your-parallel-api-key-here
 ```
 
-- [ ] **Step 2: Add placeholder to `.dev.vars`**
+- [ ] **Step 3: Add placeholder to `.dev.vars`**
 
 Append to `.dev.vars`:
 
@@ -104,7 +124,7 @@ PARALLEL_API_KEY=stub-for-phase-04
 
 The real key goes in before Phase 11 (UI demo time). Phase 04 tests never exercise the web_search execute path, so a stub is fine.
 
-- [ ] **Step 3: Add test-env binding override**
+- [ ] **Step 4: Add test-env binding override**
 
 In `vitest.config.ts`, inside `poolOptions.workers.miniflare.bindings`, add:
 
@@ -114,7 +134,7 @@ PARALLEL_API_KEY: "test-stub-key",
 
 Alongside the existing `ANTHROPIC_API_KEY` stub.
 
-- [ ] **Step 4: Regenerate env.d.ts**
+- [ ] **Step 5: Regenerate env.d.ts**
 
 ```bash
 pnpm run types
@@ -468,20 +488,11 @@ export function getSyncErrorsTool(agent: ChatAgent) {
 ```ts
 import { tool } from "ai";
 import { z } from "zod";
+import Parallel, { APIError } from "parallel-web";
 import type { ChatAgent } from "../../../server";
 
-const PARALLEL_SEARCH_URL = "https://api.parallel.ai/v1beta/search";
-const DEFAULT_MAX_RESULTS = 10;
+const DEFAULT_MODE = "agentic" as const;
 const DEFAULT_EXCERPT_CHARS = 4000;
-
-interface ParallelSearchResponse {
-  results: Array<{
-    url?: string;
-    title?: string;
-    excerpts?: string[];
-    [key: string]: unknown;
-  }>;
-}
 
 export function webSearchTool(agent: ChatAgent) {
   return tool({
@@ -502,43 +513,41 @@ export function webSearchTool(agent: ChatAgent) {
         ),
     }),
     execute: async ({ objective, search_queries }) => {
-      const body = {
-        objective,
-        search_queries: search_queries ?? null,
-        max_results: DEFAULT_MAX_RESULTS,
-        excerpts: { max_chars_per_result: DEFAULT_EXCERPT_CHARS },
-        mode: "agentic",
-      };
-      const response = await fetch(PARALLEL_SEARCH_URL, {
-        method: "POST",
-        headers: {
-          "x-api-key": agent.env.PARALLEL_API_KEY,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
+      const client = new Parallel({ apiKey: agent.env.PARALLEL_API_KEY });
+      try {
+        const result = await client.beta.search({
+          objective,
+          search_queries: search_queries ?? null,
+          mode: DEFAULT_MODE,
+          excerpts: { max_chars_per_result: DEFAULT_EXCERPT_CHARS },
+        });
         return {
-          error: "parallel_ai_request_failed",
-          status: response.status,
-          detail: text.slice(0, 500),
+          objective,
+          search_id: result.search_id,
+          result_count: result.results.length,
+          results: result.results.map((r) => ({
+            url: r.url,
+            title: r.title ?? null,
+            excerpts: r.excerpts ?? [],
+            publish_date: r.publish_date ?? null,
+          })),
         };
+      } catch (e) {
+        if (e instanceof APIError) {
+          return {
+            error: "parallel_ai_request_failed",
+            status: e.status,
+            detail: e.message,
+          };
+        }
+        throw e;
       }
-      const parsed = (await response.json()) as ParallelSearchResponse;
-      return {
-        objective,
-        result_count: parsed.results?.length ?? 0,
-        results: (parsed.results ?? []).map((r) => ({
-          url: r.url ?? null,
-          title: r.title ?? null,
-          excerpts: r.excerpts ?? [],
-        })),
-      };
     },
   });
 }
 ```
+
+Why the SDK over bare `fetch()`: typed `SearchResult` + `WebSearchResult` responses (no hand-rolled interfaces drifting from Parallel's actual API), typed error subclasses (`APIError` has `.status` + `.message`; catching it as a distinct return shape lets the agent see failure vs. success clearly), and auto-inherited fixes as Parallel iterates.
 
 - [ ] **Step 5: Create the tool registry**
 
