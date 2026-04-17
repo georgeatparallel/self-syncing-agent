@@ -17,7 +17,9 @@
     "types": "wrangler types env.d.ts --include-runtime false",
     "format": "oxfmt --write .",
     "lint": "oxlint src/",
-    "check": "oxfmt --check . && oxlint src/ && tsc"
+    "check": "oxfmt --check . && oxlint src/ && tsc && vitest run",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.71",
@@ -36,6 +38,7 @@
   "devDependencies": {
     "@babel/plugin-proposal-decorators": "^7.29.0",
     "@cloudflare/vite-plugin": "1.32.3",
+    "@cloudflare/vitest-pool-workers": "^0.12.21",
     "@cloudflare/workers-types": "^4.20260416.2",
     "@rolldown/binding-darwin-arm64": "1.0.0-rc.15",
     "@rolldown/plugin-babel": "^0.2.3",
@@ -49,6 +52,7 @@
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
     "vite": "^8.0.8",
+    "vitest": "^2.1.9",
     "wrangler": "4.83.0"
   },
   "pnpm": {

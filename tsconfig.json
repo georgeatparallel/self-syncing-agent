@@ -1,6 +1,12 @@
 {
   "extends": "agents/tsconfig",
   "compilerOptions": {
-    // add your overrides here
-  }
+    "types": [
+      "node",
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-pool-workers",
+      "vite/client"
+    ]
+  },
+  "include": ["src", "tests", "env.d.ts", "vitest.config.ts"]
 }
