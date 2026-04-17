@@ -148,3 +148,6 @@ dist
 # Local doc / reference dumps kept out of the repo
 *-full-docs.txt
 
+# Brainstorming companion session files
+.superpowers/
+
