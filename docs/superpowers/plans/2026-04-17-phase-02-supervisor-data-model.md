@@ -15,6 +15,7 @@
 ## File Structure
 
 **Created:**
+
 - `src/db/types.ts` — row types and input types for `Sync` + `SyncError`
 - `src/db/syncs.ts` — `createSync`, `getSyncById`, `getSyncByName`, `listSyncs`, `updateSync`, `deleteSync` — pure functions over `this.sql`
 - `src/db/sync-errors.ts` — `logSyncError`, `listSyncErrors`, `getSyncErrorStats` — same style
@@ -22,6 +23,7 @@
 - `tests/supervisor-data-model.test.ts` — integration tests using `runInDurableObject`
 
 **Modified:**
+
 - `src/server.ts` — `ChatAgent.onStart()` calls `applySchemaMigrations(this.sql)`; add thin public methods on `ChatAgent` that wrap the repo (used by tests now, by tools in Phase 04)
 
 No changes to `wrangler.jsonc`, `package.json`, or client code in this phase.
@@ -31,12 +33,14 @@ No changes to `wrangler.jsonc`, `package.json`, or client code in this phase.
 ## Pre-flight context (critical to know before starting)
 
 **`this.sql` semantics** (from `/cloudflare/agents` docs):
+
 - `this.sql\`CREATE TABLE IF NOT EXISTS ...\`` — DDL, executes synchronously, returns empty array
 - `this.sql\`INSERT INTO ... VALUES (${x})\`` — same; parameter binding is automatic via `${}`
-- `this.sql<RowType>\`SELECT * FROM ...\`` — returns `RowType[]`; empty array if no rows
+- `this.sql<RowType>\`SELECT \* FROM ...\``— returns`RowType[]`; empty array if no rows
 - It's a property of the `Agent` base class — we inherit it automatically by extending `AIChatAgent`
 
 **`runInDurableObject` for tests** — imported from `cloudflare:test`:
+
 ```ts
 await runInDurableObject(stub, async (instance, ctx) => {
   // instance is the actual ChatAgent; we can call any method on it
@@ -49,6 +53,7 @@ await runInDurableObject(stub, async (instance, ctx) => {
 ## Task 1: Types module
 
 **Files:**
+
 - Create: `src/db/types.ts`
 
 - [ ] **Step 1: Create `src/db/types.ts` with exactly this content:**
@@ -134,6 +139,7 @@ export interface SyncErrorStat {
 ## Task 2: Schema migration module
 
 **Files:**
+
 - Create: `src/db/schema.ts`
 
 - [ ] **Step 1: Create `src/db/schema.ts` with exactly this content:**
@@ -150,7 +156,10 @@ export interface SyncErrorStat {
  * statements — existing DOs already have the old tables.
  */
 
-type SqlTag = <T = unknown>(strings: TemplateStringsArray, ...values: unknown[]) => T[];
+type SqlTag = <T = unknown>(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => T[];
 
 export function applySchemaMigrations(sql: SqlTag): void {
   sql`
@@ -191,6 +200,7 @@ export function applySchemaMigrations(sql: SqlTag): void {
 ```
 
 Why the specific structure:
+
 - `ON DELETE CASCADE` on `sync_errors.sync_id` — when a sync is deleted, its error log is cleaned up automatically. Simpler than two-step delete logic.
 - The index on `(sync_id, occurred_at DESC)` supports the common "give me the most recent N errors for this sync" query that Phase 04+ will use.
 - `SqlTag` type is the local name for the template-literal callable shape; we define it once here to avoid importing SDK internals.
@@ -200,6 +210,7 @@ Why the specific structure:
 ## Task 3: Syncs repo (TDD — tests first via `runInDurableObject`)
 
 **Files:**
+
 - Create: `src/db/syncs.ts`
 - Modify: `tests/supervisor-data-model.test.ts` (next task creates this file)
 
@@ -208,13 +219,12 @@ The repo functions take the `sql` tag as a parameter so they're easy to test and
 - [ ] **Step 1: Create `src/db/syncs.ts` with exactly this content:**
 
 ```ts
-import type {
-  Sync,
-  NewSync,
-  SyncPatch,
-} from "./types";
+import type { Sync, NewSync, SyncPatch } from "./types";
 
-type SqlTag = <T = unknown>(strings: TemplateStringsArray, ...values: unknown[]) => T[];
+type SqlTag = <T = unknown>(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => T[];
 
 export function createSync(sql: SqlTag, input: NewSync): Sync {
   const now = Date.now();
@@ -233,7 +243,10 @@ export function createSync(sql: SqlTag, input: NewSync): Sync {
     )
   `;
   const row = getSyncById(sql, input.id);
-  if (!row) throw new Error(`createSync: insert did not persist row for id=${input.id}`);
+  if (!row)
+    throw new Error(
+      `createSync: insert did not persist row for id=${input.id}`
+    );
   return row;
 }
 
@@ -273,7 +286,7 @@ export function updateSync(sql: SqlTag, id: string, patch: SyncPatch): Sync {
         : patch.upstream_webhook_id,
     code_id: patch.code_id ?? existing.code_id,
     version: patch.version ?? existing.version,
-    updated_at: Date.now(),
+    updated_at: Date.now()
   };
 
   sql`
@@ -304,6 +317,7 @@ export function deleteSync(sql: SqlTag, id: string): void {
 ## Task 4: Sync-errors repo
 
 **Files:**
+
 - Create: `src/db/sync-errors.ts`
 
 - [ ] **Step 1: Create `src/db/sync-errors.ts` with exactly this content:**
@@ -311,7 +325,10 @@ export function deleteSync(sql: SqlTag, id: string): void {
 ```ts
 import type { SyncError, NewSyncError, SyncErrorStat } from "./types";
 
-type SqlTag = <T = unknown>(strings: TemplateStringsArray, ...values: unknown[]) => T[];
+type SqlTag = <T = unknown>(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => T[];
 
 export function logSyncError(sql: SqlTag, input: NewSyncError): void {
   sql`
@@ -331,7 +348,7 @@ export function logSyncError(sql: SqlTag, input: NewSyncError): void {
 export function listSyncErrors(
   sql: SqlTag,
   syncId: string,
-  limit: number = 20,
+  limit: number = 20
 ): SyncError[] {
   return sql<SyncError>`
     SELECT * FROM sync_errors
@@ -348,7 +365,7 @@ export function listSyncErrors(
  */
 export function getSyncErrorStats(
   sql: SqlTag,
-  sinceMs: number,
+  sinceMs: number
 ): SyncErrorStat[] {
   return sql<SyncErrorStat>`
     SELECT
@@ -373,6 +390,7 @@ export function getSyncErrorStats(
 ## Task 5: Wire schema migration into `ChatAgent.onStart`
 
 **Files:**
+
 - Modify: `src/server.ts`
 
 - [ ] **Step 1: Import the migration function at the top of `src/server.ts`**
@@ -424,6 +442,7 @@ Expected: zero errors. If `this.sql` is typed differently than our `SqlTag` shap
 ## Task 6: Integration tests — schema, repo, and per-user isolation
 
 **Files:**
+
 - Create: `tests/supervisor-data-model.test.ts`
 
 This is the meat of Phase 02's verification. We use `runInDurableObject` to run code inside a real `ChatAgent` instance and exercise the repo against its actual SQLite.
@@ -439,12 +458,12 @@ import {
   getSyncByName,
   listSyncs,
   updateSync,
-  deleteSync,
+  deleteSync
 } from "../src/db/syncs";
 import {
   logSyncError,
   listSyncErrors,
-  getSyncErrorStats,
+  getSyncErrorStats
 } from "../src/db/sync-errors";
 import type { NewSync } from "../src/db/types";
 
@@ -458,12 +477,14 @@ function sampleSync(overrides: Partial<NewSync> = {}): NewSync {
     id: overrides.id ?? crypto.randomUUID(),
     name: overrides.name ?? `test-sync-${crypto.randomUUID().slice(0, 8)}`,
     integration: overrides.integration ?? "linear",
-    handler_code: overrides.handler_code ?? "export default { async fetch() {} }",
-    schema_ddl: overrides.schema_ddl ?? "CREATE TABLE issues (id TEXT PRIMARY KEY)",
+    handler_code:
+      overrides.handler_code ?? "export default { async fetch() {} }",
+    schema_ddl:
+      overrides.schema_ddl ?? "CREATE TABLE issues (id TEXT PRIMARY KEY)",
     filter_description: overrides.filter_description,
     webhook_secret: overrides.webhook_secret ?? "secret-32-bytes-here",
     upstream_webhook_id: overrides.upstream_webhook_id,
-    code_id: overrides.code_id ?? `code-${crypto.randomUUID().slice(0, 8)}`,
+    code_id: overrides.code_id ?? `code-${crypto.randomUUID().slice(0, 8)}`
   };
 }
 
@@ -544,7 +565,7 @@ describe("supervisor data model", () => {
       const input = sampleSync({
         name: "patch-target",
         handler_code: "v1-code",
-        code_id: "code-v1",
+        code_id: "code-v1"
       });
 
       await runInDurableObject(stub, async (instance) => {
@@ -555,7 +576,7 @@ describe("supervisor data model", () => {
         const patched = updateSync(instance.sql, input.id, {
           handler_code: "v2-code",
           code_id: "code-v2",
-          version: 2,
+          version: 2
         });
 
         expect(patched.handler_code).toBe("v2-code");
@@ -578,7 +599,7 @@ describe("supervisor data model", () => {
         logSyncError(instance.sql, {
           sync_id: input.id,
           error_message: "test error",
-          handler_version: 1,
+          handler_version: 1
         });
 
         expect(listSyncErrors(instance.sql, input.id)).toHaveLength(1);
@@ -601,13 +622,13 @@ describe("supervisor data model", () => {
         logSyncError(instance.sql, {
           sync_id: sync.id,
           error_message: "first",
-          handler_version: 1,
+          handler_version: 1
         });
         await new Promise((r) => setTimeout(r, 2));
         logSyncError(instance.sql, {
           sync_id: sync.id,
           error_message: "second",
-          handler_version: 1,
+          handler_version: 1
         });
 
         const errors = listSyncErrors(instance.sql, sync.id);
@@ -626,12 +647,12 @@ describe("supervisor data model", () => {
         logSyncError(instance.sql, {
           sync_id: sync.id,
           error_message: "old boom",
-          handler_version: 1,
+          handler_version: 1
         });
         logSyncError(instance.sql, {
           sync_id: sync.id,
           error_message: "new boom",
-          handler_version: 1,
+          handler_version: 1
         });
 
         // Include everything created in this test.
@@ -696,6 +717,7 @@ pnpm test
 Expected final count: **22 passing** across 4 test files (1 smoke + 8 identity + 2 per-user-do + 11 supervisor-data-model).
 
 Breakdown of the new 11:
+
 - schema (1): tables exist after onStart
 - syncs repo (6): create+read, null for unknown, UNIQUE name, list order, partial update, delete cascade
 - sync_errors repo (2): log+list newest-first, stats aggregation
@@ -720,6 +742,7 @@ Expected: all four commands (oxfmt, oxlint, tsc, vitest) green. If oxfmt reforma
 ## Task 8: Commit and push
 
 **Files:**
+
 - All Phase 02 changes: `src/db/types.ts`, `src/db/schema.ts`, `src/db/syncs.ts`, `src/db/sync-errors.ts`, `tests/supervisor-data-model.test.ts`, `src/server.ts`.
 
 - [ ] **Step 1: Stage and verify**

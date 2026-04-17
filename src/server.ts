@@ -11,6 +11,7 @@ import {
   type ModelMessage
 } from "ai";
 import { z } from "zod";
+import { applySchemaMigrations } from "./db/schema";
 
 /**
  * The AI SDK's downloadAssets step runs `new URL(data)` on every file
@@ -38,6 +39,11 @@ export class ChatAgent extends AIChatAgent<Env> {
   maxPersistedMessages = 100;
 
   onStart() {
+    // Bind `this.sql` before passing it out: the SDK's sql method reads
+    // `this.ctx` internally, so an unbound reference loses the binding
+    // and throws "Cannot read properties of undefined (reading 'ctx')".
+    applySchemaMigrations(this.sql.bind(this));
+
     // Configure OAuth popup behavior for MCP servers that require authentication
     this.mcp.configureOAuthCallback({
       customHandler: (result) => {
