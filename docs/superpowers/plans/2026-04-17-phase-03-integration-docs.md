@@ -15,12 +15,14 @@
 ## File Structure
 
 **Created:**
+
 - `src/integrations/types.ts` — `IntegrationDocs`, `WebhookEventDoc`
 - `src/integrations/linear.ts` — `export const linearDocs: IntegrationDocs`
 - `src/integrations/index.ts` — `getIntegrationDocs(name: Integration): IntegrationDocs | null`
 - `tests/integration-docs.test.ts` — shape tests + registry lookup tests
 
 **Modified:**
+
 - `src/db/types.ts` — narrow `Integration` from `"linear" | "github"` to `"linear"` (retroactive V1 scope cleanup)
 
 No changes to `src/server.ts`, `wrangler.jsonc`, or anything in `src/db/syncs.ts` / `src/db/sync-errors.ts` (the repo is generic over the Integration type).
@@ -32,6 +34,7 @@ No changes to `src/server.ts`, `wrangler.jsonc`, or anything in `src/db/syncs.ts
 Phase 02 declared `Integration = "linear" | "github"` anticipating both. V1 ships only Linear; widening the type re-opens when we do V2 Pipedream or GitHub. Keeping the union now creates a dead code path where the type permits `"github"` but the runtime has no docs, no auth pattern, no registration logic for it.
 
 **Files:**
+
 - Modify: `src/db/types.ts`
 
 - [ ] **Step 1: Narrow the type**
@@ -67,6 +70,7 @@ Expected: zero errors. The repo functions and existing tests use `integration: I
 ## Task 2: Integration docs types
 
 **Files:**
+
 - Create: `src/integrations/types.ts`
 
 - [ ] **Step 1: Create `src/integrations/types.ts` with exactly this content:**
@@ -143,11 +147,13 @@ export interface IntegrationDocs {
 ## Task 3: Curate Linear docs
 
 **Files:**
+
 - Create: `src/integrations/linear.ts`
 
 This file is the whole reason Phase 03 exists. Content must be accurate, concise, and actionable. Sources consulted during curation:
-- Linear webhook reference: https://linear.app/developers/webhooks
-- Linear GraphQL API: https://studio.apollographql.com/public/Linear-API/variant/current/home
+
+- Linear webhook reference: <https://linear.app/developers/webhooks>
+- Linear GraphQL API: <https://studio.apollographql.com/public/Linear-API/variant/current/home>
 - Our design doc's view of Linear's webhook shape
 
 - [ ] **Step 1: Create `src/integrations/linear.ts` with exactly this content:**
@@ -173,12 +179,12 @@ export const linearDocs: IntegrationDocs = {
     "HTTP header `Authorization: <LINEAR_API_KEY>` (no Bearer prefix). The supervisor injects this; agent-authored handler code calls `fetch('https://api.linear.app/graphql', ...)` and the proxy adds the header transparently.",
   webhook_registration: {
     description:
-      "Register webhooks via the GraphQL mutation `webhookCreate(input: WebhookCreateInput!)`. Pass a URL the supervisor owns plus a signing secret the supervisor generated; Linear signs every delivery with HMAC-SHA256(raw body, secret).",
+      "Register webhooks via the GraphQL mutation `webhookCreate(input: { url, resourceTypes, teamId? | allPublicTeams? })`. **Linear generates the signing secret**; the mutation response returns it only if explicitly selected — request `{ webhook { id, secret, enabled } }` in the selection set and store both values. Only workspace admins (or OAuth apps with `admin` scope) can create webhooks.",
     endpoint: "https://api.linear.app/graphql",
     method: "POST",
     signature_header: "Linear-Signature",
     signature_algorithm:
-      "hex(HMAC-SHA256(rawRequestBody, webhookSecret)); compare case-insensitively with the header value using a constant-time check",
+      "hex-encoded HMAC-SHA256 of the RAW request body (not re-stringified JSON) using the webhook's signing secret. Compare to the header value using a constant-time byte compare.",
   },
   webhook_events: [
     {
@@ -187,10 +193,21 @@ export const linearDocs: IntegrationDocs = {
       description:
         "Fires whenever any issue in the workspace is created, updated (state, title, labels, assignee, description, etc.), or permanently deleted.",
       sample_payload: {
+        // NOTE: Linear's public docs publish a Comment webhook sample but
+        // not an Issue one. The envelope below (action/actor/type/data/
+        // updatedFrom/url/createdAt/organizationId/webhookTimestamp/
+        // webhookId) matches Linear's documented webhook envelope; the
+        // data field uses Linear's public Issue GraphQL type. Treat the
+        // data shape as "fields that exist on Issue" rather than "fields
+        // guaranteed in every payload" — Linear only includes changed /
+        // populated fields in some events.
         action: "update",
         actor: {
-          id: "abc123",
+          id: "b5ea5f1f-8adc-4f52-b4bd-ab4e84cf51ba",
+          type: "user",
           name: "Alice Example",
+          email: "alice@example.com",
+          url: "https://linear.app/company/profiles/alice",
         },
         type: "Issue",
         createdAt: "2026-04-17T10:30:00.000Z",
@@ -231,6 +248,16 @@ export const linearDocs: IntegrationDocs = {
           updatedAt: "2026-04-17T10:30:00.000Z",
           url: "https://linear.app/team-core/issue/ENG-42/fix-login-flicker",
         },
+        // Present on `action: 'update'` only. Contains the PREVIOUS values
+        // of fields that changed. Useful for detecting transitions.
+        updatedFrom: {
+          state: {
+            id: "state-uuid-prior",
+            name: "Todo",
+            type: "unstarted",
+          },
+          updatedAt: "2026-04-16T09:00:00.000Z",
+        },
         url: "https://linear.app/team-core/issue/ENG-42",
         organizationId: "org-uuid",
         webhookTimestamp: 1776417000000,
@@ -239,6 +266,8 @@ export const linearDocs: IntegrationDocs = {
       field_notes: [
         "`action` is one of 'create' | 'update' | 'remove' — NOT 'created'/'updated'/'deleted'",
         "`type` at the top level identifies the resource type; the real payload is `data`",
+        "`updatedFrom` is present ONLY on update actions and contains the PREVIOUS values of changed fields. Use it for transition detection (e.g., 'moved from Todo to In Progress').",
+        "`actor` has `{ id, type, name, email, url }`; `actor.type` can be 'user' | 'webhook' | 'oauthApp' (and others) — useful if the handler wants to filter bot-driven changes",
         "`data.labels` is an object with a `nodes` array, not a flat array of labels",
         "`data.state.type` (not `state.name`) is the stable state category: triage | unstarted | started | completed | canceled",
         "`data.assignee`, `data.creator`, `data.estimate` may be null — always guard",
@@ -248,11 +277,13 @@ export const linearDocs: IntegrationDocs = {
     },
   ],
   common_gotchas: [
-    "Linear's workspace-scoped API key (from Settings → API) works for webhook registration. Personal OAuth tokens are workspace-scoped too, but for V1 we use a shared workspace API key.",
-    "The `Authorization` header has NO 'Bearer' prefix. It's just the raw key.",
-    "A single issue update can fire multiple webhook deliveries (e.g., title change + label change) — make the handler idempotent on `data.id`.",
-    "When writing SQL UPSERTs, use `INSERT OR REPLACE` or `INSERT ... ON CONFLICT(id) DO UPDATE` keyed on the Linear `data.id`, not on our row id.",
-    "Webhook deliveries are retried by Linear on non-2xx responses — make sure 5xx errors are actually retryable and 4xx are not.",
+    "Linear's workspace API key (from Settings → API) works for webhook registration. Only workspace admins can create/read webhooks (or OAuth apps with `admin` scope).",
+    "The `Authorization` header has NO 'Bearer' prefix when using a workspace API key. It's just the raw key. (OAuth access tokens DO use Bearer, but V1 uses the workspace key.)",
+    "**Webhook timeout is 5 seconds.** If the handler takes longer than 5s Linear treats it as a failure and retries. Keep handlers fast — write the row, return 200, do heavier work asynchronously.",
+    "**Retry schedule is max 3 attempts at 1min, 1hr, 6hr.** After that Linear may auto-disable the webhook. Non-2xx responses count as failures.",
+    "**Verify `webhookTimestamp` is within ~60s of now** to prevent replay attacks. Linear explicitly recommends this in their docs.",
+    "Use the RAW request body for signature verification — re-stringifying a parsed JSON body will shift whitespace and break the HMAC check.",
+    "A single issue change can fire multiple webhook deliveries — make the handler idempotent on `data.id` (use `INSERT OR REPLACE` or `ON CONFLICT(id) DO UPDATE`).",
     "Nested fields (state, team, assignee, labels) are the full linked resources, not just IDs — you can store the id + snapshot name without a separate fetch.",
   ],
 };
@@ -263,6 +294,7 @@ export const linearDocs: IntegrationDocs = {
 ## Task 4: Integration registry
 
 **Files:**
+
 - Create: `src/integrations/index.ts`
 
 - [ ] **Step 1: Create `src/integrations/index.ts` with exactly this content:**
@@ -300,6 +332,7 @@ export type { IntegrationDocs, WebhookEventDoc } from "./types";
 ## Task 5: Tests
 
 **Files:**
+
 - Create: `tests/integration-docs.test.ts`
 
 - [ ] **Step 1: Create `tests/integration-docs.test.ts` with exactly this content:**
@@ -374,6 +407,7 @@ pnpm test
 Expected: **28 passing** across 5 test files (22 existing + 6 new from this file).
 
 Breakdown of the 6 new:
+
 - linearDocs (4): top-level fields, webhook_registration, Issue event sample, common gotchas
 - getIntegrationDocs (2): valid lookup, null fallback
 
@@ -394,6 +428,7 @@ Expected: all four stages green. If oxfmt reformats the JSON-heavy `linear.ts`, 
 ## Task 7: Commit and push
 
 **Files:**
+
 - All Phase 03 changes: `src/db/types.ts`, `src/integrations/types.ts`, `src/integrations/linear.ts`, `src/integrations/index.ts`, `tests/integration-docs.test.ts`
 
 - [ ] **Step 1: Stage and verify**
