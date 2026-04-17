@@ -49,6 +49,33 @@ describe("registerLinearWebhook", () => {
     });
   });
 
+  it("sends personal API keys without the Bearer prefix", async () => {
+    const fetcher = vi.fn(async () =>
+      mockResponse({
+        data: {
+          webhookCreate: {
+            success: true,
+            webhook: { id: "wh_abc", secret: "sec_xyz", enabled: true }
+          }
+        }
+      })
+    );
+
+    await registerLinearWebhook(
+      "lin_api_plain",
+      "https://example.com/webhook",
+      ["Issue"],
+      "label",
+      fetcher
+    );
+
+    const [, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    // Linear rejects personal API keys wrapped in `Bearer ` with 401.
+    expect((init.headers as Record<string, string>).authorization).toBe(
+      "lin_api_plain"
+    );
+  });
+
   it("throws LinearApiError with auth_failed code on 401", async () => {
     const fetcher = vi.fn(async () => mockResponse({}, 401));
     await expect(

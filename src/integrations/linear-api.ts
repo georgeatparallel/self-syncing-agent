@@ -10,6 +10,23 @@
 
 const LINEAR_API_URL = "https://api.linear.app/graphql";
 
+/**
+ * Linear accepts two auth formats and is strict about the distinction:
+ *   - OAuth access tokens (lin_oauth_...) go as `Bearer <token>`
+ *   - Personal API keys  (lin_api_...)   go as the raw key, no prefix
+ * Sending the wrong format yields a 401 regardless of actual permissions.
+ *
+ * We detect on the `lin_oauth_` prefix rather than `lin_api_` as the
+ * positive case because Linear's OAuth tokens are the ones that
+ * require the prefix wrapping — personal API keys and any future
+ * token format are passed through as-is.
+ */
+function linearAuthHeader(accessToken: string): string {
+  return accessToken.startsWith("lin_oauth_")
+    ? `Bearer ${accessToken}`
+    : accessToken;
+}
+
 type GraphQLResponse<T> = {
   data?: T;
   errors?: Array<{ message: string; extensions?: Record<string, unknown> }>;
@@ -79,7 +96,7 @@ export async function registerLinearWebhook(
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`
+      authorization: linearAuthHeader(accessToken)
     },
     body: JSON.stringify({ query, variables })
   });
@@ -134,7 +151,7 @@ export async function unregisterLinearWebhook(
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`
+      authorization: linearAuthHeader(accessToken)
     },
     body: JSON.stringify({ query, variables: { id: webhookId } })
   });
