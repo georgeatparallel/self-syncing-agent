@@ -28,6 +28,7 @@ No source code under `src/` changes in this phase. The goal is purely harness se
 ## Task 1: Install test dependencies
 
 **Files:**
+
 - Modify: `package.json` (via `pnpm add -D`)
 
 - [ ] **Step 1: Install vitest + Cloudflare Workers pool**
@@ -56,6 +57,7 @@ If either is missing, rerun Step 1 — don't proceed.
 ## Task 2: Add test scripts to package.json
 
 **Files:**
+
 - Modify: `package.json:13-21` — `"scripts"` block
 
 - [ ] **Step 1: Add `test` and `test:watch` scripts**
@@ -83,6 +85,7 @@ Two changes: added the `test` and `test:watch` scripts, and appended `&& vitest 
 ## Task 3: Configure Vitest to use the Workers pool
 
 **Files:**
+
 - Create: `vitest.config.ts` (project root)
 
 - [ ] **Step 1: Create `vitest.config.ts` at the project root**
@@ -109,6 +112,7 @@ export default defineWorkersConfig({
 ```
 
 Why each line:
+
 - `defineWorkersConfig` — the pool's helper that wires everything
 - `include` — tests can live in a top-level `tests/` folder or colocated with source as `*.test.ts`
 - `singleWorker: true` — runs all tests in one Worker isolate (simpler, avoids cross-test flakiness; fine for our scale)
@@ -120,6 +124,7 @@ Why each line:
 ## Task 4: Update tsconfig so test files type-check
 
 **Files:**
+
 - Modify: `tsconfig.json` (project root)
 
 - [ ] **Step 1: Replace tsconfig.json content**
@@ -151,6 +156,7 @@ Replace the whole file with:
 ```
 
 Two changes:
+
 - `compilerOptions.types` — adds the pool's ambient types (exposes `SELF`, `env`, etc. from `cloudflare:test` module)
 - `include` — ensures TS checks test files and config files, not just `src/`
 
@@ -169,6 +175,7 @@ Expected: no errors. If errors appear related to `cloudflare:test` or `SELF`, th
 ## Task 5: Write and run a smoke test
 
 **Files:**
+
 - Create: `tests/smoke.test.ts`
 
 This test validates the harness end-to-end: it spins up the real Worker, sends it an HTTP request, and asserts behavior. It does not yet touch our agent logic — just proves the plumbing works.
@@ -193,6 +200,7 @@ describe("worker harness smoke test", () => {
 ```
 
 Why this particular test:
+
 - Our current `src/server.ts` wires `routeAgentRequest(request, env)` as the only custom handler, and falls through to `new Response("Not found", { status: 404 })` for anything unmatched. That fallthrough is the most stable, assumption-free behavior to lock in as the first test.
 - `SELF.fetch` is how `@cloudflare/vitest-pool-workers` exposes the running Worker to tests.
 - Any failure in harness setup (missing bindings, DO migrations not applied, wrangler config unreachable) will surface before the assertion — making this a real smoke test, not a tautology.
@@ -227,6 +235,7 @@ If it fails with a DO migration error: the starter's `"new_sqlite_classes": ["Ch
 ## Task 6: Commit Phase 00
 
 **Files:**
+
 - All Phase 00 changes
 
 - [ ] **Step 1: Stage and commit**
