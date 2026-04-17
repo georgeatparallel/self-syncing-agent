@@ -88,7 +88,7 @@ _Everything above is the assignment as given. Everything below is our working no
 - **Runtime**: Cloudflare Workers + Durable Objects.
 - **Sync execution**: DO Facets + Worker Loader (each sync = one Facet with its own isolated SQLite).
 - **Agent framework**: Cloudflare Agents SDK.
-- **LLM**: Claude Sonnet 4.6 via `@ai-sdk/anthropic` (chosen for code-gen quality — the agent writes real JS and SQL, and that's the load-bearing skill).
+- **LLM**: Claude Opus 4.7 via `@ai-sdk/anthropic` (model ID `claude-opus-4-7`, released 2026-04-16 — chosen for top-tier code generation and multi-step tool reasoning, which are the load-bearing skills for this agent).
 - **HTTP**: Hono (CTO-confirmed — lightweight, Cloudflare-native).
 - **UI**: React (from starter), served alongside the Worker.
 - **Package manager**: pnpm; Node 22 pinned via `.nvmrc` and `package.json#engines`.
@@ -161,7 +161,7 @@ Reference this when designing. The agent only runs in phases 1 and 3 — phase 2
 
 - Scaffolded via `cloudflare/agents-starter` (React + Agents SDK + Vite + Tailwind).
 - pnpm, Hono added, Node 22 pinned, rolldown arm64 binding explicitly pinned (pnpm optional-dep quirk with the rolldown RC).
-- Workers AI removed; Anthropic Claude Sonnet 4.6 wired via `@ai-sdk/anthropic`.
+- Workers AI removed; Anthropic Claude Opus 4.7 wired via `@ai-sdk/anthropic`.
 - `.dev.vars` / `.dev.vars.example` pattern set up for `ANTHROPIC_API_KEY`.
 - Chat works end-to-end locally (DO persists messages, WebSocket streams, Claude responds).
 - **No sync architecture built yet.** Next step is architecture design on paper before any code touches the supervisor / Facet / proxy / webhook-router boundaries.

@@ -70,7 +70,7 @@ export class ChatAgent extends AIChatAgent<Env> {
 		const anthropic = createAnthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
 
 		const result = streamText({
-			model: anthropic('claude-sonnet-4-6'),
+			model: anthropic('claude-opus-4-7'),
 			system: `You are a helpful assistant that can understand images. You can check the weather, get the user's timezone, run calculations, and schedule tasks. When users share images, describe what you see and answer questions about them.
 
 ${getSchedulePrompt({ date: new Date() })}
