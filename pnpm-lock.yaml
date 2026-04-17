@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@ai-sdk/anthropic':
+        specifier: ^3.0.71
+        version: 3.0.71(zod@4.3.6)
       '@cloudflare/ai-chat':
         specifier: ^0.4.4
         version: 0.4.4(@ai-sdk/react@3.0.170(react@19.2.5)(zod@4.3.6))(agents@0.11.1)(ai@6.0.168(zod@4.3.6))(react@19.2.5)(zod@4.3.6)
@@ -38,9 +41,6 @@ importers:
       streamdown:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      workers-ai-provider:
-        specifier: ^3.1.11
-        version: 3.1.11(@ai-sdk/provider@3.0.8)(ai@6.0.168(zod@4.3.6))
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -95,6 +95,12 @@ importers:
         version: 4.83.0(@cloudflare/workers-types@4.20260417.1)
 
 packages:
+
+  '@ai-sdk/anthropic@3.0.71':
+    resolution: {integrity: sha512-bUWOzrzR0gJKJO/PLGMR4uH2dqEgqGhrsCV+sSpk4KtOEnUQlfjZI/F7BFlqSvVpFbjdgYRRLysAeEZpJ6S1lg==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
 
   '@ai-sdk/gateway@3.0.104':
     resolution: {integrity: sha512-ZKX5n74io8VIRlhIMSLWVlvT3sXC8Z7cZ9GHuWBWZDVi96+62AIsWuLGvMfcBA1STYuSoDrp6rIziZmvrTq0TA==}
@@ -1002,7 +1008,6 @@ packages:
   '@rolldown/binding-darwin-arm64@1.0.0-rc.15':
     resolution: {integrity: sha512-oArR/ig8wNTPYsXL+Mzhs0oxhxfuHRfG7Ikw7jXsw8mYOtk71W0OkF2VEVh699pdmzjPQsTjlD1JIOoHkLP1Fg==}
     engines: {node: ^20.19.0 || >=22.12.0}
-    cpu: [arm64]
     os: [darwin]
 
   '@rolldown/binding-darwin-x64@1.0.0-rc.15':
@@ -2976,12 +2981,6 @@ packages:
     engines: {node: '>=16'}
     hasBin: true
 
-  workers-ai-provider@3.1.11:
-    resolution: {integrity: sha512-+J2dfbSs3r/DUEzo2buhBuomTrz/kHd063vqz3qsZjZFmnprlE82TLqWfB1jb+AGBCiygQ1J4EimCLy9ZU7QMQ==}
-    peerDependencies:
-      '@ai-sdk/provider': ^3.0.0
-      ai: ^6.0.0
-
   wrangler@4.83.0:
     resolution: {integrity: sha512-gw5g3LCiuAqVWxaoKY6+quE0HzAUEFb/FV3oAlNkE1ttd4XP3FiV91XDkkzUCcdqxS4WjhQvPhIDBNdhEi8P0A==}
     engines: {node: '>=20.3.0'}
@@ -3047,6 +3046,12 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
+
+  '@ai-sdk/anthropic@3.0.71(zod@4.3.6)':
+    dependencies:
+      '@ai-sdk/provider': 3.0.8
+      '@ai-sdk/provider-utils': 4.0.23(zod@4.3.6)
+      zod: 4.3.6
 
   '@ai-sdk/gateway@3.0.104(zod@4.3.6)':
     dependencies:
@@ -6103,11 +6108,6 @@ snapshots:
       '@cloudflare/workerd-linux-64': 1.20260415.1
       '@cloudflare/workerd-linux-arm64': 1.20260415.1
       '@cloudflare/workerd-windows-64': 1.20260415.1
-
-  workers-ai-provider@3.1.11(@ai-sdk/provider@3.0.8)(ai@6.0.168(zod@4.3.6)):
-    dependencies:
-      '@ai-sdk/provider': 3.0.8
-      ai: 6.0.168(zod@4.3.6)
 
   wrangler@4.83.0(@cloudflare/workers-types@4.20260417.1):
     dependencies:

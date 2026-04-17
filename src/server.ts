@@ -1,4 +1,4 @@
-import { createWorkersAI } from 'workers-ai-provider';
+import { createAnthropic } from '@ai-sdk/anthropic';
 import { callable, routeAgentRequest, type Schedule } from 'agents';
 import { getSchedulePrompt, scheduleSchema } from 'agents/schedule';
 import { AIChatAgent, type OnChatMessageOptions } from '@cloudflare/ai-chat';
@@ -67,12 +67,10 @@ export class ChatAgent extends AIChatAgent<Env> {
 
 	async onChatMessage(_onFinish: unknown, options?: OnChatMessageOptions) {
 		const mcpTools = this.mcp.getAITools();
-		const workersai = createWorkersAI({ binding: this.env.AI });
+		const anthropic = createAnthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
 
 		const result = streamText({
-			model: workersai('@cf/moonshotai/kimi-k2.5', {
-				sessionAffinity: this.sessionAffinity,
-			}),
+			model: anthropic('claude-sonnet-4-6'),
 			system: `You are a helpful assistant that can understand images. You can check the weather, get the user's timezone, run calculations, and schedule tasks. When users share images, describe what you see and answer questions about them.
 
 ${getSchedulePrompt({ date: new Date() })}
