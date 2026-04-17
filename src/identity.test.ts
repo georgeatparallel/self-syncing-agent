@@ -76,11 +76,12 @@ describe("identity", () => {
       expect(getOrMintUserId()).toBe(stored);
     });
 
-    it("prefers the pathname userId over the stored one and writes it through", () => {
-      storage.setItem(USER_ID_KEY, "old-id");
-      const fromUrl = "11111111-2222-3333-4444-555555555555";
-      expect(getOrMintUserId(fromUrl)).toBe(fromUrl);
-      expect(storage.getItem(USER_ID_KEY)).toBe(fromUrl);
+    it("does not touch storage when reading an existing id", () => {
+      const stored = "6a2c9b1e-ff01-4d3e-9c10-aabbccddeeff";
+      storage.setItem(USER_ID_KEY, stored);
+      getOrMintUserId();
+      // Still the same, unchanged
+      expect(storage.getItem(USER_ID_KEY)).toBe(stored);
     });
   });
 });

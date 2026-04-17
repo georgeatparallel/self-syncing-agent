@@ -247,8 +247,11 @@ function Chat() {
   // so the URL is shareable. useState with a lazy initializer ensures this runs
   // once (before useAgent sees it) and stays stable across re-renders.
   const [userId] = useState(() => {
+    // URL wins when present — shared /user/<other> links render the shared
+    // agent for the session WITHOUT mutating this visitor's own persisted
+    // identity. Otherwise fall back to the visitor's own minted/stored ID.
     const fromUrl = userIdFromPath(window.location.pathname);
-    const resolved = getOrMintUserId(fromUrl);
+    const resolved = fromUrl ?? getOrMintUserId();
     if (window.location.pathname !== userPath(resolved)) {
       window.history.replaceState({}, "", userPath(resolved));
     }

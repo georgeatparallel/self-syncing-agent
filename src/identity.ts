@@ -1,6 +1,11 @@
 /**
  * Per-user identity, client-minted. No auth; the userId is the capability.
- * Sharing the /user/<id> URL = sharing the agent.
+ *
+ * Storage semantics: localStorage holds THIS visitor's own minted userId,
+ * nothing else. Visiting a /user/<other> shared link lets you view that
+ * other agent for the session (React prefers the URL when present) but
+ * does NOT overwrite your own stored identity. Navigate to / to return to
+ * your own agent.
  */
 
 export const USER_ID_KEY = "self-syncing-agent:user-id";
@@ -23,15 +28,11 @@ export function userPath(userId: string): string {
 }
 
 /**
- * Resolve the user's ID. If the caller passes `fromUrl` (extracted from the
- * pathname), that wins and is persisted to localStorage. Otherwise return
- * the stored ID, or mint a new UUIDv4 on first visit.
+ * Return the visitor's own persisted userId, minting and storing a new
+ * UUIDv4 on first visit. Does NOT read from the URL — that's the React
+ * layer's job. This function is purely about "who am I (the visitor)."
  */
-export function getOrMintUserId(fromUrl?: string | null): string {
-  if (fromUrl) {
-    localStorage.setItem(USER_ID_KEY, fromUrl);
-    return fromUrl;
-  }
+export function getOrMintUserId(): string {
   const stored = localStorage.getItem(USER_ID_KEY);
   if (stored) return stored;
   const minted = crypto.randomUUID();
