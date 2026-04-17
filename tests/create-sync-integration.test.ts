@@ -175,20 +175,18 @@ describe("create_sync end-to-end", () => {
         });
 
         try {
-          // Force a facet-load failure via the simulated throw above.
-          // In production, a BROKEN_HANDLER like this would fail at
-          // Worker Loader compile time or first .fetch() call, landing
-          // in the tool's facet_load_failed branch.
-          const BROKEN_HANDLER =
-            "export async function handleWebhook( { NOT VALID JS SYNTAX";
-
+          // The fake facets.get() throws synchronously (see installFakeFacets
+          // above), driving the tool's facet_load_failed branch. In
+          // production, the same branch fires when Worker Loader fails to
+          // compile handler.js (e.g., syntax error) or when
+          // worker.getDurableObjectClass throws.
           const tools = createSyncTool(instance);
           const result = await tools.execute!(
             {
               name: "linear-rollback",
               integration: "linear",
               schema_ddl: SAMPLE_SCHEMA,
-              handler_code: BROKEN_HANDLER
+              handler_code: SAMPLE_HANDLER
             },
             {} as never
           );

@@ -3,16 +3,16 @@ import { FACET_WRAPPER_SOURCE } from "./wrapper";
 
 /**
  * WorkerCode shape from the Cloudflare Dynamic Workers API reference.
- * We don't import the concrete type because the official type
- * (provided via @cloudflare/workers-types) is still stabilizing; local
- * interface keeps us flexible and doesn't lose anything material.
+ * Fields match @cloudflare/workers-types' `WorkerLoaderWorkerCode`, which
+ * is what env.LOADER.get() ultimately expects. Declaring locally keeps
+ * the module importable without a types-only import line.
  */
 export interface WorkerCode {
   compatibilityDate: string;
   compatibilityFlags?: string[];
   mainModule: string;
   modules: Record<string, string>;
-  globalOutbound?: unknown;
+  globalOutbound?: Fetcher | null;
 }
 
 export interface BuildFacetWorkerCodeInput {
@@ -38,9 +38,10 @@ export function buildFacetWorkerCode(
   input: BuildFacetWorkerCodeInput
 ): WorkerCode {
   return {
-    // Use a compatibility date close to today's. Must be >= the runtime's
-    // minimum; "2026-04-01" is safe for a 2026-04-17 project.
-    compatibilityDate: "2026-04-01",
+    // Pinned to the parent worker's compatibilityDate (see wrangler.jsonc)
+    // so facets and supervisor speak the same runtime. Updating the parent's
+    // compat date should update this too.
+    compatibilityDate: "2026-03-02",
     mainModule: "main.js",
     modules: {
       "main.js": FACET_WRAPPER_SOURCE,
@@ -51,7 +52,7 @@ export function buildFacetWorkerCode(
     // the runtime supplies HttpGateway because we export it from src/server.ts.
     globalOutbound: (
       workerExports as unknown as {
-        HttpGateway: (opts: { props: unknown }) => unknown;
+        HttpGateway: (opts: { props: unknown }) => Fetcher;
       }
     ).HttpGateway({ props: { userId: input.userId } })
   };

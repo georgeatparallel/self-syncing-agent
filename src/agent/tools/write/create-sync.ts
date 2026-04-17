@@ -9,7 +9,6 @@ import {
 } from "../../../integrations/linear-api";
 import { attachFacet } from "../../../facet/loader";
 import type { Integration, NewSync } from "../../../db/types";
-import type { FacetsApi, WorkerLoaderLike } from "../../../facet/loader";
 
 /**
  * Resource types passed to Linear's webhookCreate per integration + sync.
@@ -66,6 +65,19 @@ export function createSyncTool(agent: ChatAgent) {
     > => {
       const sql = agent.sql.bind(agent);
       const userId = agent.name;
+
+      // 0. Misconfiguration guard: PUBLIC_BASE_URL must be set to a public
+      //    URL before Linear can reach our webhooks. Catching here turns a
+      //    mysterious "Linear rejected the URL" error into an actionable
+      //    ops error the user can explain to whoever deployed the worker.
+      if (!agent.env.PUBLIC_BASE_URL) {
+        return {
+          ok: false,
+          error: "misconfigured",
+          detail:
+            "PUBLIC_BASE_URL is not set. Set it to the worker's public URL (e.g. https://self-syncing-agent.<account>.workers.dev) before creating syncs."
+        };
+      }
 
       // 1. Uniqueness check (friendly error before we start doing real work)
       if (getSyncByName(sql, name)) {
@@ -129,12 +141,7 @@ export function createSyncTool(agent: ChatAgent) {
       //    error, missing handleWebhook export, etc.), we roll back both
       //    the DB row and the upstream webhook.
       try {
-        const facet = attachFacet(
-          { LOADER: agent.env.LOADER as unknown as WorkerLoaderLike },
-          agent.ctx.facets as unknown as FacetsApi,
-          created,
-          userId
-        );
+        const facet = attachFacet(agent.env, agent.ctx.facets, created, userId);
         // Trigger facet initialization (wrapper applies schema on first fetch).
         // We hit a no-op health-check path; wrapper still applies schema because
         // it runs on EVERY fetch until #schemaApplied is true.
@@ -149,7 +156,7 @@ export function createSyncTool(agent: ChatAgent) {
       } catch (e) {
         // Rollback step 3 (DB) and step 2 (Linear).
         try {
-          (agent.ctx.facets as unknown as FacetsApi).delete(name);
+          agent.ctx.facets.delete(name);
         } catch {
           // facets.delete throws if the facet never actually started;
           // swallow since our DB row still needs cleanup.

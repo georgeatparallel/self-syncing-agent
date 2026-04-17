@@ -10,62 +10,24 @@ export function syncCodeId(sync: Pick<Sync, "id" | "version">): string {
 }
 
 /**
- * Shape of the facet stub returned by ctx.facets.get. Reflects what the
- * Cloudflare docs promise ("behaves like a Durable Object stub") without
- * tying to a specific types import.
- */
-export interface FacetStub {
-  fetch(request: Request): Promise<Response>;
-}
-
-/**
- * Shape of the Durable Object class returned by worker.getDurableObjectClass.
- * Not typed explicitly by @cloudflare/workers-types; we use `unknown` at the
- * boundary and cast because FacetStartupOptions.class accepts it.
- */
-type DurableObjectClass = unknown;
-
-/**
- * Shape of the Worker Loader binding (env.LOADER). Minimal interface
- * sufficient for what we use.
- */
-export interface WorkerLoaderLike {
-  get(
-    id: string,
-    callback: () => Promise<unknown>
-  ): {
-    getDurableObjectClass(className: string): DurableObjectClass;
-  };
-}
-
-/**
- * Shape of this.ctx.facets on a Durable Object.
- */
-export interface FacetsApi {
-  get(
-    name: string,
-    callback: () =>
-      | { class: DurableObjectClass }
-      | Promise<{ class: DurableObjectClass }>
-  ): FacetStub;
-  abort(name: string, reason?: unknown): void;
-  delete(name: string): void;
-}
-
-/**
- * Attach (or resume) the facet for a sync. The returned stub is ready
+ * Attach (or resume) the facet for a sync. The returned `Fetcher` is ready
  * to receive .fetch() calls (e.g., from Phase 09's webhook route).
  *
- * The Worker Loader callback only runs if this codeId has not been
- * loaded yet; subsequent facets for the same sync+version reuse the
- * cached isolate. Bumping sync.version in update_sync forces a miss.
+ * The Worker Loader callback only runs if this codeId has not been loaded
+ * yet; subsequent attachments for the same sync+version reuse the cached
+ * isolate. Bumping sync.version in update_sync forces a miss.
+ *
+ * Types: WorkerLoader / DurableObjectFacets / Fetcher all come from
+ * @cloudflare/workers-types. The env.d.ts wires env.LOADER as WorkerLoader
+ * after Phase 06's worker_loaders binding, and DurableObjectState.facets is
+ * typed as DurableObjectFacets.
  */
 export function attachFacet(
-  env: { LOADER: WorkerLoaderLike },
-  facets: FacetsApi,
+  env: { LOADER: WorkerLoader },
+  facets: DurableObjectFacets,
   sync: Sync,
   userId: string
-): FacetStub {
+): Fetcher {
   const codeId = syncCodeId(sync);
   return facets.get(sync.name, async () => {
     const worker = env.LOADER.get(codeId, async () =>
