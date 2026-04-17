@@ -7,6 +7,11 @@
  *   - Extending DurableObject so ctx.facets.get returns a proper DO stub
  *   - Lazily applying the schema on first fetch (idempotent)
  *   - Delegating to handleWebhook(request, sql) from the agent's module
+ *   - Exposing __supervisorPing() as a supervisor-only RPC probe. Creates
+ *     the facet + forces Worker Loader compilation without running the
+ *     agent's handler, so the supervisor can validate a freshly-built
+ *     bundle at create_sync time. Schema application stays on the fetch
+ *     path so real webhooks still initialize the DB on first delivery.
  *
  * The agent's handler.js contract: export a function
  *   `handleWebhook(request: Request, sql: SqlStorage): Promise<Response>`
@@ -34,6 +39,13 @@ export class App extends DurableObject {
     }
     return handleWebhook(request, this.ctx.storage.sql);
   }
+
+  // Supervisor-only probe. Touching the facet forces Worker Loader to
+  // compile the bundle; if the agent's handler.js has a syntax error,
+  // missing handleWebhook export, or any other load-time failure, this
+  // call rejects and the supervisor's try/catch rolls back. Double
+  // underscore discourages the agent from shadowing it in handler.js.
+  async __supervisorPing() {}
 }
 
 function splitStatements(ddl) {

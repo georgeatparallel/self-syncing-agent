@@ -29,11 +29,15 @@ const SAMPLE_SCHEMA =
  * schema init + handler delegation). The rollback test installs a
  * `get()` that throws, exercising the `facet_load_failed` branch.
  */
+interface FakeFacetStub {
+  fetch: (req: Request) => Promise<Response>;
+  __supervisorPing: () => Promise<void>;
+}
 interface FakeFacets {
   get(
     name: string,
     callback: () => { class: unknown } | Promise<{ class: unknown }>
-  ): { fetch: (req: Request) => Promise<Response> };
+  ): FakeFacetStub;
   abort: (name: string, reason?: unknown) => void;
   delete: (name: string) => void;
 }
@@ -106,7 +110,8 @@ describe("create_sync end-to-end", () => {
             // returned class (unusable under Miniflare's workerd).
             void Promise.resolve(callback()).catch(() => {});
             return {
-              fetch: async () => new Response("ok", { status: 200 })
+              fetch: async () => new Response("ok", { status: 200 }),
+              __supervisorPing: async () => {}
             };
           },
           abort: () => {},

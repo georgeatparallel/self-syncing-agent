@@ -136,22 +136,16 @@ export function createSyncTool(agent: ChatAgent) {
         };
       }
 
-      // 4. Attach the facet. If Worker Loader rejects the code (syntax
-      //    error, missing handleWebhook export, etc.), we roll back both
-      //    the DB row and the upstream webhook.
+      // 4. Attach the facet and force Worker Loader to compile the bundle.
+      //    If the agent's handler.js has a syntax error or is missing the
+      //    handleWebhook export, the ping call rejects and we roll back
+      //    both the DB row and the upstream webhook. Schema application
+      //    stays on the fetch path — the first real webhook will apply it.
       try {
         const facet = attachFacet(agent.env, agent.ctx.facets, created, userId);
-        // Trigger facet initialization (wrapper applies schema on first fetch).
-        // We hit a no-op health-check path; wrapper still applies schema because
-        // it runs on EVERY fetch until #schemaApplied is true.
-        const initResponse = await facet.fetch(
-          new Request("https://facet.internal/__init__", { method: "POST" })
-        );
-        if (initResponse.status >= 500) {
-          throw new Error(
-            `Facet init returned ${initResponse.status} — handler likely threw before returning.`
-          );
-        }
+        await (
+          facet as unknown as { __supervisorPing(): Promise<void> }
+        ).__supervisorPing();
       } catch (e) {
         // Rollback step 3 (DB) and step 2 (Linear).
         try {
