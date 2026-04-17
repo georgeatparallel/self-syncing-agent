@@ -458,10 +458,17 @@ All provisioned via `wrangler secret put <NAME>` for deployed environments. Loca
 
 Called out so that future sessions know what to verify on implementation:
 
-- The exact shape of `globalOutbound` configuration — whether it takes a `Fetcher` object, a `{ service }` binding, or something else — needs verification against live CF docs before wiring the proxy.
-- Quota limits on facets-per-DO are **not documented**. For V1, assume arbitrary — design is tolerant of whatever limit exists.
-- Facet cold-start latency is **not documented**. If measured latency is high enough to cause webhook delivery timeouts, consider pre-warming or reshaping the facet lifecycle.
-- Worker Loader cache semantics (invalidation, eviction, cross-region propagation) are thin. Use `code_id` bumps on every update to avoid stale cache hits.
+- **`globalOutbound` configuration shape** — whether it takes a `Fetcher` object, a `{ service }` binding, or something else — needs verification against live CF docs before wiring the proxy.
+
+- **Quota limits on facets-per-DO are not documented.** For V1, assume arbitrary — design is tolerant of whatever limit exists.
+
+- **Facet cold-start latency is not documented.** First invocation of a facet after DO wake-up involves spinning up its isolate. If measured latency is high enough to cause webhook delivery timeouts, consider pre-warming or reshaping the facet lifecycle. (Separate concept from Worker Loader's code cache — see below.)
+
+- **Worker Loader cache semantics are only partly documented.** Two things to get right:
+  - **Cache keying (we control this):** every handler update MUST bump `code_id` — use `${sync_id}:v${version}` — to force a cache miss on Cloudflare's side. Reusing the same codeId silently serves stale compiled code. This is the load-bearing rule of the whole update path.
+  - **Eviction and cold-compile latency (platform-managed, undocumented):** first load of a brand-new codeId compiles + spins up an isolate. Time unknown but expected tolerable for our scale. DO migration across regions (rare, platform-triggered) would invalidate the local compiled-code cache on the new location — a one-time latency bump, not a correctness issue.
+
+- **Co-location is guaranteed.** DOs are location-bound; facets attached to a DO always run in the DO's location; Worker Loader invocations from inside that DO use that location's code cache. So for a single user's flow (chat + webhooks + facet execution), nothing crosses regions except the inbound webhook RPC from the edge Worker to the DO — which is by design.
 
 ---
 
