@@ -75,4 +75,16 @@ describe("buildFacetWorkerCode", () => {
       props: { userId: "user-xyz" }
     });
   });
+
+  it("wrapper source exposes __query and #ensureSchema", () => {
+    const bundle = buildFacetWorkerCode({
+      schemaDdl: "CREATE TABLE IF NOT EXISTS x (id TEXT);",
+      handlerCode:
+        "export async function handleWebhook(){ return new Response('ok'); }",
+      userId: "u1"
+    });
+    const main = bundle.modules["main.js"];
+    expect(main).toMatch(/#ensureSchema/);
+    expect(main).toMatch(/async __query\(/);
+  });
 });

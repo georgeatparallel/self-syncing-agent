@@ -3,15 +3,18 @@
  * `modules` map at sync-creation time alongside a generated `schema.js`
  * and the agent-authored `handler.js`.
  *
- * The wrapper is responsible for:
- *   - Extending DurableObject so ctx.facets.get returns a proper DO stub
- *   - Lazily applying the schema on first fetch (idempotent)
- *   - Delegating to handleWebhook(request, sql) from the agent's module
- *   - Exposing __supervisorPing() as a supervisor-only RPC probe. Creates
- *     the facet + forces Worker Loader compilation without running the
- *     agent's handler, so the supervisor can validate a freshly-built
- *     bundle at create_sync time. Schema application stays on the fetch
- *     path so real webhooks still initialize the DB on first delivery.
+ * The wrapper's supervisor-only responsibilities:
+ *   - fetch delegate: run schema-init then call the agent's handleWebhook
+ *   - schema init: #ensureSchema() applies SCHEMA_DDL once, lazily, shared
+ *     by both fetch and __query (a query_sync may fire before any webhook
+ *     has hit, so the query path also needs to trigger init)
+ *   - __supervisorPing(): no-op RPC that forces Worker Loader compilation
+ *     at create_sync time without running the agent's handler
+ *   - __query(sql): supervisor-only SQL read path. Catches SQLite errors
+ *     and returns { ok, rows | error } so a bad agent-written query can't
+ *     wedge the facet. Tool layer enforces SELECT/WITH-only; wrapper is
+ *     power-not-policy. Double underscore discourages the agent from
+ *     shadowing it in handler.js.
  *
  * The agent's handler.js contract: export a function
  *   `handleWebhook(request: Request, sql: SqlStorage): Promise<Response>`
@@ -26,17 +29,20 @@ import { handleWebhook } from "./handler.js";
 export class App extends DurableObject {
   #schemaApplied = false;
 
-  async fetch(request) {
-    if (!this.#schemaApplied) {
-      // Run each DDL statement. The agent-authored schema_ddl may contain
-      // multiple statements separated by ';'. We split rather than passing
-      // the whole string because SqlStorage.exec only runs one statement
-      // at a time.
-      for (const stmt of splitStatements(SCHEMA_DDL)) {
-        if (stmt.trim()) this.ctx.storage.sql.exec(stmt);
-      }
-      this.#schemaApplied = true;
+  #ensureSchema() {
+    if (this.#schemaApplied) return;
+    // Run each DDL statement. The agent-authored schema_ddl may contain
+    // multiple statements separated by ';'. We split rather than passing
+    // the whole string because SqlStorage.exec only runs one statement
+    // at a time.
+    for (const stmt of splitStatements(SCHEMA_DDL)) {
+      if (stmt.trim()) this.ctx.storage.sql.exec(stmt);
     }
+    this.#schemaApplied = true;
+  }
+
+  async fetch(request) {
+    this.#ensureSchema();
     return handleWebhook(request, this.ctx.storage.sql);
   }
 
@@ -46,6 +52,22 @@ export class App extends DurableObject {
   // call rejects and the supervisor's try/catch rolls back. Double
   // underscore discourages the agent from shadowing it in handler.js.
   async __supervisorPing() {}
+
+  // Supervisor-only query path. Tool layer enforces SELECT/WITH-only;
+  // this method is power-not-policy. Catches SQLite errors so a bad
+  // query from the user can't wedge the facet.
+  async __query(sql) {
+    this.#ensureSchema();
+    try {
+      const rows = this.ctx.storage.sql.exec(sql).toArray();
+      return { ok: true, rows };
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e)
+      };
+    }
+  }
 }
 
 function splitStatements(ddl) {
