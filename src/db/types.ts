@@ -9,7 +9,13 @@
  * ambient context can surface them to the agent for recovery.
  */
 
-export type Integration = "linear" | "github";
+/**
+ * Supported integrations for V1. Narrow single-member union so tools and
+ * runtime code are kept honest — adding a new integration requires
+ * widening here AND supplying webhook-registration + credential logic to
+ * match. V2 (Pipedream Connect) replaces this with a dynamic registry.
+ */
+export type Integration = "linear";
 
 /**
  * Shape of `this.sql` exposed by the Cloudflare Agents SDK on the Agent

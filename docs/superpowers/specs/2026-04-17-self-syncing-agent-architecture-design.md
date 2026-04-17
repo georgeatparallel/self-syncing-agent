@@ -194,18 +194,17 @@ interface CredentialSource {
 - No global webhook index needed. The user DO knows its own syncs.
 - See section 10.2 for the detailed flow including signature verification.
 
-## 8. Agent tool surface (10 tools)
+## 8. Agent tool surface (9 tools)
 
 ### 8.1 Read tools (no approval)
 
-| Tool                                     | Input                                     | Output                                                                           | Notes                                                                 |
-| ---------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ---------------------------------- |
-| `list_syncs()`                           | —                                         | `[{sync_id, name, integration, row_count, version, last_activity}]`              | Rich detail for the sync list UI                                      |
-| `get_sync(sync_id)`                      | `sync_id: string`                         | `{handler_code, schema_ddl, version, recent_activity, row_count, recent_errors}` | Full sync detail                                                      |
-| `get_sync_errors(sync_id, limit=20)`     | `sync_id`, `limit`                        | `[sync_error rows]`                                                              | Full stack traces + payload previews for debugging                    |
-| `query_sync(sync_id, sql)`               | `sync_id`, `sql: string`                  | `rows[]`                                                                         | **SELECT-only**; enforced in the facet                                |
-| `get_integration_docs(integration)`      | `"linear"`                                | `"github"`                                                                       | `{webhook_events: [...], api_base_url, auth_pattern, common_gotchas}` | Curated JSON bundles in the worker |
-| `web_search(objective, search_queries?)` | `objective: string`, `queries?: string[]` | `[{url, title, excerpt, ...}]`                                                   | Parallel AI agentic mode; 10 results; 4KB excerpts                    |
+| Tool                                     | Input                                     | Output                                                                           | Notes                                                                                                                 |
+| ---------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `list_syncs()`                           | —                                         | `[{sync_id, name, integration, row_count, version, last_activity}]`              | Rich detail for the sync list UI                                                                                      |
+| `get_sync(sync_id)`                      | `sync_id: string`                         | `{handler_code, schema_ddl, version, recent_activity, row_count, recent_errors}` | Full sync detail                                                                                                      |
+| `get_sync_errors(sync_id, limit=20)`     | `sync_id`, `limit`                        | `[sync_error rows]`                                                              | Full stack traces + payload previews for debugging                                                                    |
+| `query_sync(sync_id, sql)`               | `sync_id`, `sql: string`                  | `rows[]`                                                                         | **SELECT-only**; enforced in the facet                                                                                |
+| `web_search(objective, search_queries?)` | `objective: string`, `queries?: string[]` | `[{url, title, excerpt, ...}]`                                                   | Parallel AI agentic mode; 10 results; 4KB excerpts. This is the agent's sole docs-verification primitive — see §11.1. |
 
 ### 8.2 Write tools (always approval via Agents SDK `needsApproval`)
 
@@ -296,8 +295,7 @@ sequenceDiagram
     participant Facet
 
     User->>Agent: "Keep Linear bugs in sync"
-    Agent->>Agent: get_integration_docs("linear")
-    Agent->>Agent: web_search (if needed)
+    Agent->>Agent: web_search (if shape not confident from training)
     Agent->>User: Drafts schema + handler in chat, asks approval
     User->>UI: Click Approve
     UI->>Sup: create_sync(...)
@@ -365,9 +363,11 @@ Trivial; covered in prose:
 
 ### 11.1 Layer 1 — prevention (at code-generation time)
 
-- `**get_integration_docs(integration)`\*\* — V1 ships curated JSON bundles for Linear and GitHub. Includes webhook event types, payload schemas, sample payloads, auth patterns, and common gotchas. Small enough to read every session.
-- `**web_search` (Parallel)\*\* — fallback for unknown integrations, recent API changes, error-code lookup, general research.
-- **System prompt discipline** — "Before writing a handler, call `get_integration_docs` to get the webhook payload schema. Write code against the documented shape. Do not guess at field names."
+- **`web_search` (Parallel AI agentic mode)** — the agent's single docs-verification primitive. Used to look up webhook payload shapes, API conventions, error-code meanings, and anything else where confidence from training is insufficient. Returns up to 10 excerpts of ≤4KB each, ranked by relevance.
+- **System prompt discipline** (written in Phase 07) — "Before drafting a handler for any integration, verify the webhook payload shape. If your training data is confident and recent, proceed; otherwise call `web_search` first. Never guess field names — if you're unsure, capture the whole payload into a `raw_payload` JSONB column and refine later via `run_in_sync`."
+- **Conservative-first pattern for unknown integrations (V2 relevance)** — in a V2 Pipedream world, the agent defaults to "capture raw payload into a blob column" for integrations it doesn't recognize; subsequent deliveries + Layer-2 error recovery iteratively refine the handler.
+
+Note: we explicitly rejected hand-curating a per-integration docs bundle. See §14.1.
 
 ### 11.2 Layer 2 — recovery (at runtime)
 
@@ -402,19 +402,36 @@ Enumerated here so the V1 build is shaped to accept them without rework.
 - Swap `EnvCredentialSource` → `PipedreamCredentialSource` in the proxy.
 - **No changes required to facet code or Worker Loader wiring.** The proxy's interface is stable.
 
-### 13.2 Web search replacing JSON docs
-
-Delete `get_integration_docs` once `web_search` coverage is good enough. Add a `docs_cache` table in supervisor SQLite to avoid re-searching for well-known integrations.
-
-### 13.3 Background agents (webhook-spawned)
+### 13.2 Background agents (webhook-spawned)
 
 After N consecutive sync failures, auto-spawn an agent run that reads errors, proposes a fix, and calls `update_sync` (still with user approval). Same tool surface, different trigger.
+
+### 13.3 Docs caching
+
+If `web_search` latency becomes demo-distracting, add a `docs_cache` table in supervisor SQLite keyed on `(integration, event_type)` to memoize search summaries. Not V1.
 
 ### 13.4 Rate limiting
 
 Per-session message cap on the public URL to prevent LLM-cost abuse. Not V1.
 
-## 14. Out of scope for V1 (explicit)
+## 14. Architectural decisions explicitly rejected
+
+Listed so reviewers can see what we considered and decided against, and why.
+
+### 14.1 Per-integration curated docs bundle
+
+Proposed: ship `src/integrations/linear.ts` (etc.) containing webhook payload schemas, auth patterns, and gotchas; agent consults via a `get_integration_docs` tool before drafting handler code.
+
+**Rejected because:**
+
+- The agent (Opus 4.7) is the same LLM that would curate the bundle. The bundle adds no information the agent doesn't have from training.
+- It doesn't generalize to V2: the V2 pitch is Pipedream Connect covering 3000+ integrations — we can't hand-curate.
+- Curated docs drift silently from upstream reality; `web_search` is self-correcting per turn.
+- Shipping it and then deprecating it in V2 signals weak architectural conviction. Skipping it signals trust in the bitter-lesson architecture end-to-end.
+
+**Instead**: `web_search` (Parallel AI) is the single docs-verification primitive (§11.1), and Layer-2 runtime-error recovery (§11.2) catches any bad first drafts. Same mechanism works identically for V1's one integration and V2's thousands.
+
+## 15. Out of scope for V1 (explicit)
 
 - Multi-tenant authentication (cookies, sessions, real login)
 - Third-party OAuth flows (user connecting their own Linear/GitHub/etc.)
@@ -424,7 +441,7 @@ Per-session message cap on the public URL to prevent LLM-cost abuse. Not V1.
 - Admin views, user enumeration, analytics
 - Rich artifact editing beyond what the starter provides
 
-## 15. Worker env secrets
+## 16. Worker env secrets
 
 | Secret                                            | Purpose                                                  | Notes                                   |
 | ------------------------------------------------- | -------------------------------------------------------- | --------------------------------------- |
@@ -436,7 +453,7 @@ Per-session message cap on the public URL to prevent LLM-cost abuse. Not V1.
 
 All provisioned via `wrangler secret put <NAME>` for deployed environments. Local dev reads from `.dev.vars` (gitignored).
 
-## 16. Known DO Facets caveats (docs are thin)
+## 17. Known DO Facets caveats (docs are thin)
 
 Called out so that future sessions know what to verify on implementation:
 
