@@ -1,6 +1,7 @@
 import { listSyncsTool } from "./read/list-syncs";
 import { getSyncTool } from "./read/get-sync";
 import { getSyncErrorsTool } from "./read/get-sync-errors";
+import { querySyncTool } from "./read/query-sync";
 import { webSearchTool } from "./read/web-search";
 import { createSyncTool } from "./write/create-sync";
 import type { ChatAgent } from "../../server";
@@ -19,6 +20,7 @@ export function buildTools(agent: ChatAgent) {
     list_syncs: listSyncsTool(agent),
     get_sync: getSyncTool(agent),
     get_sync_errors: getSyncErrorsTool(agent),
+    query_sync: querySyncTool(agent),
     web_search: webSearchTool(agent),
     create_sync: createSyncTool(agent)
   };

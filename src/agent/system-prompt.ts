@@ -17,6 +17,7 @@ Read tools (available):
 - \`list_syncs()\` — all syncs registered for this user, with id + name + integration + version + timestamps
 - \`get_sync(sync_id)\` — full detail for one sync (handler code, schema DDL, recent errors). Returns \`{ error: "not_found" }\` for unknown ids.
 - \`get_sync_errors(sync_id, limit)\` — paginated recent errors, newest first. Full stack traces and payload previews.
+- \`query_sync(sync_id, query)\` — SELECT-only SQL against a sync's facet SQLite. Use to answer user data questions ("how many bugs?", "recent high-priority issues"). Query must start with SELECT or WITH (CTE). No parameter binding — embed literals, escape quotes by doubling. Results capped at 200 rows; narrow server-side with WHERE/LIMIT/aggregation. Errors: \`{ error: "not_found" | "invalid_sql" | "sqlite_error", detail }\`.
 - \`web_search(objective, search_queries?)\` — agentic web search via Parallel AI. Use for docs, API shapes, error-code meanings, fact-checking.
 
 Write tool (available):
