@@ -7,6 +7,8 @@ import { buildContextMessages } from "./agent/context";
 import { buildTools } from "./agent/tools";
 import { SYSTEM_PROMPT } from "./agent/system-prompt";
 
+export { HttpGateway } from "./proxy/http-gateway";
+
 const MODEL_ID = "claude-opus-4-7";
 
 export class ChatAgent extends AIChatAgent<Env> {

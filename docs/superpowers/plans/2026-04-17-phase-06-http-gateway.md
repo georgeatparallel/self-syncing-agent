@@ -11,6 +11,7 @@ Also corrected: the secret is `LINEAR_ACCESS_TOKEN` (OAuth access token from a L
 **Tech Stack:** TypeScript, `WorkerEntrypoint` from `cloudflare:workers`, Vitest, `@cloudflare/vitest-pool-workers`.
 
 **References:**
+
 - [`docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md`](../specs/2026-04-17-self-syncing-agent-architecture-design.md) §6 (outbound egress + credentials), §15 (Worker env secrets)
 - Cloudflare Dynamic Workers docs: egress control, bindings, API reference. All quoted in the local `dynamic-workers.md` reference file.
 
@@ -19,10 +20,12 @@ Also corrected: the secret is `LINEAR_ACCESS_TOKEN` (OAuth access token from a L
 ## File Structure
 
 **Created:**
+
 - `src/proxy/http-gateway.ts` — `HttpGateway` class (WorkerEntrypoint) + pure `handleGatewayRequest` helper
 - `src/proxy/http-gateway.test.ts` — 3 unit tests via the pure function (mocked forwarder)
 
 **Modified:**
+
 - `src/server.ts` — `export { HttpGateway } from "./proxy/http-gateway"` so `ctx.exports.HttpGateway` resolves at facet-load time
 - `wrangler.jsonc` — add `"worker_loaders": [{ "binding": "LOADER" }]` (needed for Phase 08; adding now so `env.d.ts` has it)
 - `.dev.vars.example` — add `LINEAR_ACCESS_TOKEN=` template
@@ -89,6 +92,7 @@ Pure function is testable by passing a mock `forwarder` (the `fetch`-shaped call
 ## Task 1: Wire `LINEAR_ACCESS_TOKEN` + `worker_loaders` binding
 
 **Files:**
+
 - Modify: `.dev.vars.example`, `.dev.vars`, `vitest.config.ts`, `wrangler.jsonc`, `env.d.ts` (regenerated)
 
 - [ ] **Step 1: Add to `.dev.vars.example`**
@@ -160,6 +164,7 @@ Expected: prints `dynamic-workers.md` and exits 0.
 ## Task 2: Create `src/proxy/http-gateway.ts`
 
 **Files:**
+
 - Create: `src/proxy/http-gateway.ts`
 
 - [ ] **Step 1: Create the file with exactly this content:**
@@ -249,6 +254,7 @@ export class HttpGateway extends WorkerEntrypoint<Env, HttpGatewayProps> {
 ```
 
 Notes:
+
 - The `_props` underscore prefix indicates intentional non-use in V1. Kept in the signature for V2 swap-in.
 - `new Request(request, { headers })` clones the request with new headers. Preserves method, body, credentials mode — everything except headers.
 - `HttpGatewayProps.userId` is optional because V1's shared-workspace model doesn't require it. V2 will type it as required on a new `PipedreamGateway` class.
@@ -258,6 +264,7 @@ Notes:
 ## Task 3: Create `src/proxy/http-gateway.test.ts` (TDD — tests first)
 
 **Files:**
+
 - Create: `src/proxy/http-gateway.test.ts`
 
 Test via the pure function `handleGatewayRequest` using a mocked forwarder. No DO setup, no `runInDurableObject`, no live network.
@@ -383,13 +390,14 @@ pnpm test
 Expected: **38 passing** across 7 test files.
 
 Breakdown:
+
 - tests/smoke.test.ts (1)
 - src/identity.test.ts (8)
 - tests/per-user-do.test.ts (2)
 - tests/supervisor-data-model.test.ts (11)
 - src/agent/context.test.ts (5)
 - tests/agent-read-tools.test.ts (8)
-- src/proxy/http-gateway.test.ts (3)  ← new
+- src/proxy/http-gateway.test.ts (3) ← new
 
 ---
 
@@ -398,6 +406,7 @@ Breakdown:
 The class needs to be a named export of the worker's main module so that `ctx.exports.HttpGateway(...)` (used at facet-load time in Phase 08) resolves.
 
 **Files:**
+
 - Modify: `src/server.ts`
 
 - [ ] **Step 1: Add the re-export**
@@ -425,6 +434,7 @@ Expected: zero errors.
 The design doc's §6.1 described a `CredentialSource` interface + `EnvCredentialSource` class. The real pattern is a `WorkerEntrypoint` subclass. §15 uses `LINEAR_API_KEY`; should be `LINEAR_ACCESS_TOKEN`.
 
 **Files:**
+
 - Modify: `docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md`
 
 - [ ] **Step 1: Replace §6 content**
@@ -452,18 +462,18 @@ Minimal V1 implementation:
 
 \`\`\`ts
 export class HttpGateway extends WorkerEntrypoint<Env, { userId?: string }> {
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    const headers = new Headers(request.headers);
-    switch (url.hostname) {
-      case "api.linear.app":
-        headers.set("Authorization", \`Bearer \${this.env.LINEAR_ACCESS_TOKEN}\`);
-        break;
-      default:
-        return new Response(JSON.stringify({ error: "unknown_host" }), { status: 403 });
-    }
-    return fetch(request, { headers });
-  }
+async fetch(request: Request): Promise<Response> {
+const url = new URL(request.url);
+const headers = new Headers(request.headers);
+switch (url.hostname) {
+case "api.linear.app":
+headers.set("Authorization", \`Bearer \${this.env.LINEAR_ACCESS_TOKEN}\`);
+break;
+default:
+return new Response(JSON.stringify({ error: "unknown_host" }), { status: 403 });
+}
+return fetch(request, { headers });
+}
 }
 \`\`\`
 

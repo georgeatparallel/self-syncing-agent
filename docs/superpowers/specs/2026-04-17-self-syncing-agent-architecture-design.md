@@ -146,45 +146,48 @@ The supervisor never reads these tables directly. All reads go through `query_sy
 
 ## 6. Outbound egress and credentials
 
-### 6.1 Proxy design
+### 6.1 Gateway design
 
-- Every facet is loaded with `globalOutbound: env.PROXY` (a service binding that points back to our own Worker at the `/__proxy/*` route).
-- When agent-authored handler code calls `fetch("https://api.linear.app/graphql", {...})`, the request is intercepted by Cloudflare's runtime and dispatched through the proxy fetcher instead.
-- The fetcher is constructed by the supervisor DO and includes an `X-SSA-User-Id` header (or equivalent identifier) so the proxy knows which user's credentials to use.
-
-### 6.2 `CredentialSource` interface — pluggable V1 / V2
+Each facet is loaded with:
 
 ```ts
-interface ResolvedCredential {
-  injectAuth(request: Request): Request;
-}
+globalOutbound: ctx.exports.HttpGateway({ props: { userId } });
+```
 
-interface CredentialSource {
-  resolve(userId: string, host: string): Promise<ResolvedCredential | null>;
+`HttpGateway` is a `WorkerEntrypoint` class exported from the supervisor worker. When facet code calls `fetch("https://api.linear.app/...")`, Cloudflare's runtime routes the request to `HttpGateway.fetch(request)`. The gateway:
+
+1. Extracts the target hostname
+2. Looks up the appropriate credential (V1: from `env.LINEAR_ACCESS_TOKEN`; V2: from a per-user Pipedream lookup using `this.ctx.props.userId`)
+3. Injects `Authorization: Bearer <token>`
+4. Forwards via `fetch(request, { headers })`
+5. Returns `403` for unknown hosts — facet code cannot reach arbitrary URLs
+
+Minimal V1 implementation:
+
+```ts
+export class HttpGateway extends WorkerEntrypoint<Env, { userId?: string }> {
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const headers = new Headers(request.headers);
+    switch (url.hostname) {
+      case "api.linear.app":
+        headers.set("Authorization", `Bearer ${this.env.LINEAR_ACCESS_TOKEN}`);
+        break;
+      default:
+        return new Response(JSON.stringify({ error: "unknown_host" }), {
+          status: 403
+        });
+    }
+    return fetch(request, { headers });
+  }
 }
 ```
 
-**V1 — `EnvCredentialSource`** (built):
+### 6.2 V1 → V2 swap
 
-- Static map of `{ host → env-secret-name }`
-- Ignores `userId` (V1 uses shared demo-account keys)
-- Returns `null` for unknown hosts → proxy responds `403`
+V2 replaces the `switch` body with a Pipedream Connect lookup keyed on `this.ctx.props.userId`. No shared interface is needed because V1 and V2 aren't composed; V2 is a successor gateway class. The V1 → V2 transition is: replace the body of `HttpGateway.fetch`, or swap out the class reference at the facet-load site to a new `PipedreamGateway` class.
 
-```ts
-// V1 map
-{
-  "api.linear.app":  env.LINEAR_API_KEY,
-  "api.github.com":  env.GITHUB_TOKEN,
-}
-```
-
-**V2 — `PipedreamCredentialSource`** (stretch):
-
-- Reads per-user `connections` table from supervisor SQLite
-- Calls Pipedream Connect to get a fresh access token for the matched integration
-- Returns `ResolvedCredential` that injects the token
-
-**Proxy behavior is identical across V1/V2** — it just calls `source.resolve(userId, host)`. The agent's handler code is identical too (`fetch(...)`). Swap is invisible to the facet layer.
+This is simpler than an abstract `CredentialSource` interface and matches the canonical Cloudflare pattern for egress control.
 
 ## 7. Inbound routing (webhooks)
 
@@ -443,13 +446,12 @@ Proposed: ship `src/integrations/linear.ts` (etc.) containing webhook payload sc
 
 ## 16. Worker env secrets
 
-| Secret                                            | Purpose                                                  | Notes                                   |
-| ------------------------------------------------- | -------------------------------------------------------- | --------------------------------------- |
-| `ANTHROPIC_API_KEY`                               | Claude LLM calls                                         | Read directly by supervisor             |
-| `PARALLEL_API_KEY`                                | `web_search` tool                                        | Read directly by supervisor             |
-| `LINEAR_API_KEY`                                  | Linear API auth (webhook registration + proxy injection) | V1 uses one shared demo-workspace token |
-| `GITHUB_TOKEN`                                    | GitHub API auth                                          | V1 uses one shared demo-account token   |
-| `PIPEDREAM_CLIENT_ID` / `PIPEDREAM_CLIENT_SECRET` | Pipedream Connect                                        | V2 only                                 |
+| Secret                                            | Purpose                                                  | Notes                                                                            |
+| ------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`                               | Claude LLM calls                                         | Read directly by supervisor                                                      |
+| `PARALLEL_API_KEY`                                | `web_search` tool                                        | Read directly by supervisor                                                      |
+| `LINEAR_ACCESS_TOKEN`                             | Linear API auth (webhook registration + proxy injection) | V1 uses one shared demo-workspace OAuth access token; V2 Pipedream replaces this |
+| `PIPEDREAM_CLIENT_ID` / `PIPEDREAM_CLIENT_SECRET` | Pipedream Connect                                        | V2 only                                                                          |
 
 All provisioned via `wrangler secret put <NAME>` for deployed environments. Local dev reads from `.dev.vars` (gitignored).
 
