@@ -57,7 +57,7 @@ flowchart TD
     Facet1[Facet sync_1<br/>own SQLite<br/>globalOutbound → PROXY]
     Facet2[Facet sync_2<br/>own SQLite<br/>globalOutbound → PROXY]
     FacetN[Facet sync_N]
-    Proxy[Supervisor-owned Proxy<br/>CredentialSource.resolve]
+    Proxy[HttpGateway WorkerEntrypoint<br/>injects Authorization: Bearer]
     Linear[api.linear.app]
     GitHub[api.github.com]
     Anthropic[api.anthropic.com]
@@ -402,8 +402,8 @@ Enumerated here so the V1 build is shaped to accept them without rework.
 
 - Add `connections` table to supervisor SQLite (user_id implicit, integration, base_url, pipedream_account_id).
 - Add `connect_integration(integration)` tool that returns a Pipedream Connect auth URL for the user.
-- Swap `EnvCredentialSource` → `PipedreamCredentialSource` in the proxy.
-- **No changes required to facet code or Worker Loader wiring.** The proxy's interface is stable.
+- Replace `HttpGateway.fetch`'s hostname switch with a per-user Pipedream Connect lookup keyed on `this.ctx.props.userId` (or swap the class reference at the facet-load site for a new `PipedreamGateway` class — either works).
+- **No changes required to facet code or Worker Loader wiring.** Facets still see `globalOutbound: ctx.exports.<Gateway>({ props: { userId } })`; only the gateway's credential-lookup body changes.
 
 ### 13.2 Background agents (webhook-spawned)
 
