@@ -22,6 +22,15 @@ export class ChatAgent extends AIChatAgent<Env> {
    */
   declare env: Env;
 
+  /**
+   * Same story as `env`: expose `ctx` publicly so tools can access
+   * `agent.ctx.facets` for Durable Object Facet operations (create_sync
+   * and friends from Phase 08 onwards). The base's declared type
+   * parameterizes on `{}` (Props); our tools only use `ctx.facets`, so
+   * the widening to `unknown` Props is harmless.
+   */
+  declare ctx: DurableObjectState<{}>;
+
   onStart() {
     applySchemaMigrations(this.sql.bind(this));
 

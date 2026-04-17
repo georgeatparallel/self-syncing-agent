@@ -2,6 +2,7 @@ import { listSyncsTool } from "./read/list-syncs";
 import { getSyncTool } from "./read/get-sync";
 import { getSyncErrorsTool } from "./read/get-sync-errors";
 import { webSearchTool } from "./read/web-search";
+import { createSyncTool } from "./write/create-sync";
 import type { ChatAgent } from "../../server";
 
 /**
@@ -9,14 +10,16 @@ import type { ChatAgent } from "../../server";
  * the agent instance so tools can read/write the supervisor SQLite
  * and reach the env bindings (ANTHROPIC_API_KEY, PARALLEL_API_KEY).
  *
- * Write tools (create_sync, update_sync, delete_sync, run_in_sync)
- * are added in Phase 08+.
+ * Write tools added progressively from Phase 08 onwards:
+ * - create_sync (Phase 08, live)
+ * - update_sync, delete_sync, run_in_sync (Phase 10+)
  */
 export function buildTools(agent: ChatAgent) {
   return {
     list_syncs: listSyncsTool(agent),
     get_sync: getSyncTool(agent),
     get_sync_errors: getSyncErrorsTool(agent),
-    web_search: webSearchTool(agent)
+    web_search: webSearchTool(agent),
+    create_sync: createSyncTool(agent)
   };
 }

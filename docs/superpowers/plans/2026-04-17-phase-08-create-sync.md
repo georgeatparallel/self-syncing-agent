@@ -11,6 +11,7 @@
 **Tech Stack:** TypeScript, Cloudflare Worker Loader (`env.LOADER`), Durable Object Facets (`this.ctx.facets`), Linear GraphQL API (`webhookCreate` / `webhookDelete` mutations), `ai` SDK `tool()` with `needsApproval: true`.
 
 **References:**
+
 - Design doc §§6, 8.2, 10.1, 11
 - [`dynamic-workers.md`](../../../dynamic-workers.md) — Worker Loader API + Facets (`ctx.facets.get`, `FacetStartupOptions`, `globalOutbound`, `ctx.exports`)
 - Linear webhook docs verified earlier: action values are `create|update|remove`, `Linear-Signature` header is hex HMAC-SHA256 of raw body, `webhookCreate` mutation requires admin scope and returns `{ success, webhook { id, secret, enabled } }`
@@ -62,9 +63,9 @@ export class ChatAgent extends AIChatAgent<Env> {
       modules: {
         "main.js": WRAPPER_SOURCE,
         "schema.js": `export const SCHEMA_DDL = ${JSON.stringify(sync.schema_ddl)};`,
-        "handler.js": sync.handler_code,
+        "handler.js": sync.handler_code
       },
-      globalOutbound: exports.HttpGateway({ props: { userId } }),
+      globalOutbound: exports.HttpGateway({ props: { userId } })
     }));
 
     const appClass = worker.getDurableObjectClass("App");
@@ -117,15 +118,25 @@ The supervisor DO calls Linear's API **directly** (not through the proxy) using 
 **`webhookCreate` mutation** (registration):
 
 ```graphql
-mutation WebhookCreate($url: String!, $resourceTypes: [String!]!, $label: String!) {
-  webhookCreate(input: {
-    url: $url
-    resourceTypes: $resourceTypes
-    allPublicTeams: true
-    label: $label
-  }) {
+mutation WebhookCreate(
+  $url: String!
+  $resourceTypes: [String!]!
+  $label: String!
+) {
+  webhookCreate(
+    input: {
+      url: $url
+      resourceTypes: $resourceTypes
+      allPublicTeams: true
+      label: $label
+    }
+  ) {
     success
-    webhook { id secret enabled }
+    webhook {
+      id
+      secret
+      enabled
+    }
   }
 }
 ```
@@ -136,7 +147,9 @@ Key: include `secret` in the selection — Linear only returns it on the initial
 
 ```graphql
 mutation WebhookDelete($id: String!) {
-  webhookDelete(id: $id) { success }
+  webhookDelete(id: $id) {
+    success
+  }
 }
 ```
 
@@ -160,6 +173,7 @@ Tests stub this with `https://test.invalid`.
 ## Task 1: Wire `PUBLIC_BASE_URL` env var
 
 **Files:**
+
 - Modify: `.dev.vars.example`, `.dev.vars`, `vitest.config.ts`, `env.d.ts` (regenerated)
 
 - [ ] **Step 1: Add to `.dev.vars.example`**
@@ -199,6 +213,7 @@ Expected: `env.d.ts` now includes `PUBLIC_BASE_URL: string`.
 ## Task 2: Linear GraphQL API helpers
 
 **Files:**
+
 - Create: `src/integrations/linear-api.ts`
 - Create: `src/integrations/linear-api.test.ts`
 
@@ -257,18 +272,28 @@ export async function registerLinearWebhook(
   url: string,
   resourceTypes: string[],
   label: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = fetch
 ): Promise<RegisteredWebhook> {
   const query = /* GraphQL */ `
-    mutation WebhookCreate($url: String!, $resourceTypes: [String!]!, $label: String!) {
-      webhookCreate(input: {
-        url: $url
-        resourceTypes: $resourceTypes
-        allPublicTeams: true
-        label: $label
-      }) {
+    mutation WebhookCreate(
+      $url: String!
+      $resourceTypes: [String!]!
+      $label: String!
+    ) {
+      webhookCreate(
+        input: {
+          url: $url
+          resourceTypes: $resourceTypes
+          allPublicTeams: true
+          label: $label
+        }
+      ) {
         success
-        webhook { id secret enabled }
+        webhook {
+          id
+          secret
+          enabled
+        }
       }
     }
   `;
@@ -278,15 +303,15 @@ export async function registerLinearWebhook(
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
+      authorization: `Bearer ${accessToken}`
     },
-    body: JSON.stringify({ query, variables }),
+    body: JSON.stringify({ query, variables })
   });
 
   if (res.status === 401 || res.status === 403) {
     throw new LinearApiError(
       "linear_api_auth_failed",
-      `Linear rejected the access token (HTTP ${res.status}).`,
+      `Linear rejected the access token (HTTP ${res.status}).`
     );
   }
 
@@ -294,13 +319,13 @@ export async function registerLinearWebhook(
   if (body.errors && body.errors.length > 0) {
     throw new LinearApiError(
       "linear_api_error",
-      body.errors.map((e) => e.message).join("; "),
+      body.errors.map((e) => e.message).join("; ")
     );
   }
   if (!body.data || !body.data.webhookCreate.success) {
     throw new LinearApiError(
       "linear_api_error",
-      "webhookCreate returned success=false without explicit errors",
+      "webhookCreate returned success=false without explicit errors"
     );
   }
 
@@ -320,26 +345,28 @@ type WebhookDeleteData = {
 export async function unregisterLinearWebhook(
   accessToken: string,
   webhookId: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = fetch
 ): Promise<void> {
   const query = /* GraphQL */ `
     mutation WebhookDelete($id: String!) {
-      webhookDelete(id: $id) { success }
+      webhookDelete(id: $id) {
+        success
+      }
     }
   `;
   const res = await fetcher(LINEAR_API_URL, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${accessToken}`,
+      authorization: `Bearer ${accessToken}`
     },
-    body: JSON.stringify({ query, variables: { id: webhookId } }),
+    body: JSON.stringify({ query, variables: { id: webhookId } })
   });
   const body = (await res.json()) as GraphQLResponse<WebhookDeleteData>;
   if (body.errors || !body.data?.webhookDelete.success) {
     throw new LinearApiError(
       "linear_api_error",
-      `webhookDelete failed for ${webhookId}: ${body.errors?.map((e) => e.message).join("; ") ?? "unknown"}`,
+      `webhookDelete failed for ${webhookId}: ${body.errors?.map((e) => e.message).join("; ") ?? "unknown"}`
     );
   }
 }
@@ -347,7 +374,7 @@ export async function unregisterLinearWebhook(
 export class LinearApiError extends Error {
   constructor(
     public code: "linear_api_auth_failed" | "linear_api_error",
-    message: string,
+    message: string
   ) {
     super(message);
     this.name = "LinearApiError";
@@ -362,13 +389,13 @@ import { describe, it, expect, vi } from "vitest";
 import {
   registerLinearWebhook,
   unregisterLinearWebhook,
-  LinearApiError,
+  LinearApiError
 } from "./linear-api";
 
 function mockResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json" }
   });
 }
 
@@ -379,10 +406,10 @@ describe("registerLinearWebhook", () => {
         data: {
           webhookCreate: {
             success: true,
-            webhook: { id: "wh_abc", secret: "sec_xyz", enabled: true },
-          },
-        },
-      }),
+            webhook: { id: "wh_abc", secret: "sec_xyz", enabled: true }
+          }
+        }
+      })
     );
 
     const result = await registerLinearWebhook(
@@ -390,7 +417,7 @@ describe("registerLinearWebhook", () => {
       "https://example.com/webhook",
       ["Issue"],
       "self-syncing-agent:test",
-      fetcher,
+      fetcher
     );
 
     expect(result).toEqual({ id: "wh_abc", secret: "sec_xyz", enabled: true });
@@ -400,37 +427,37 @@ describe("registerLinearWebhook", () => {
     const [url, init] = fetcher.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api.linear.app/graphql");
     expect((init.headers as Record<string, string>).authorization).toBe(
-      "Bearer lin_oauth_test",
+      "Bearer lin_oauth_test"
     );
     const parsed = JSON.parse(init.body as string);
     expect(parsed.variables).toEqual({
       url: "https://example.com/webhook",
       resourceTypes: ["Issue"],
-      label: "self-syncing-agent:test",
+      label: "self-syncing-agent:test"
     });
   });
 
   it("throws LinearApiError with auth_failed code on 401", async () => {
     const fetcher = vi.fn(async () => mockResponse({}, 401));
     await expect(
-      registerLinearWebhook("bad", "url", ["Issue"], "label", fetcher),
+      registerLinearWebhook("bad", "url", ["Issue"], "label", fetcher)
     ).rejects.toMatchObject({
       code: "linear_api_auth_failed",
-      name: "LinearApiError",
+      name: "LinearApiError"
     });
   });
 
   it("throws LinearApiError with error messages on GraphQL errors", async () => {
     const fetcher = vi.fn(async () =>
       mockResponse({
-        errors: [{ message: "not authorized" }, { message: "invalid input" }],
-      }),
+        errors: [{ message: "not authorized" }, { message: "invalid input" }]
+      })
     );
     await expect(
-      registerLinearWebhook("tok", "url", ["Issue"], "label", fetcher),
+      registerLinearWebhook("tok", "url", ["Issue"], "label", fetcher)
     ).rejects.toMatchObject({
       code: "linear_api_error",
-      message: expect.stringMatching(/not authorized.*invalid input/),
+      message: expect.stringMatching(/not authorized.*invalid input/)
     });
   });
 
@@ -440,13 +467,13 @@ describe("registerLinearWebhook", () => {
         data: {
           webhookCreate: {
             success: false,
-            webhook: { id: "", secret: "", enabled: false },
-          },
-        },
-      }),
+            webhook: { id: "", secret: "", enabled: false }
+          }
+        }
+      })
     );
     await expect(
-      registerLinearWebhook("tok", "url", ["Issue"], "label", fetcher),
+      registerLinearWebhook("tok", "url", ["Issue"], "label", fetcher)
     ).rejects.toThrow(/success=false/);
   });
 });
@@ -454,19 +481,19 @@ describe("registerLinearWebhook", () => {
 describe("unregisterLinearWebhook", () => {
   it("resolves void on success", async () => {
     const fetcher = vi.fn(async () =>
-      mockResponse({ data: { webhookDelete: { success: true } } }),
+      mockResponse({ data: { webhookDelete: { success: true } } })
     );
     await expect(
-      unregisterLinearWebhook("tok", "wh_abc", fetcher),
+      unregisterLinearWebhook("tok", "wh_abc", fetcher)
     ).resolves.toBeUndefined();
   });
 
   it("throws on GraphQL errors", async () => {
     const fetcher = vi.fn(async () =>
-      mockResponse({ errors: [{ message: "webhook not found" }] }),
+      mockResponse({ errors: [{ message: "webhook not found" }] })
     );
     await expect(
-      unregisterLinearWebhook("tok", "wh_missing", fetcher),
+      unregisterLinearWebhook("tok", "wh_missing", fetcher)
     ).rejects.toThrow(/webhook not found/);
   });
 });
@@ -477,6 +504,7 @@ describe("unregisterLinearWebhook", () => {
 ## Task 3: Facet wrapper template
 
 **Files:**
+
 - Create: `src/facet/wrapper.ts`
 
 The wrapper is a fixed string that gets injected as `main.js` into every facet bundle. It:
@@ -537,6 +565,7 @@ function splitStatements(ddl) {
 ```
 
 Notes:
+
 - The wrapper is a string literal in TS. The embedded JS inside the template uses its own quotes; escape backslashes in regex (`\\s`, `\\n`).
 - We split the DDL on `;\n` because `SqlStorage.exec()` only accepts a single statement. Multiple CREATE TABLEs separated by semicolons need to be run individually.
 - The splitter is naive on purpose (YAGNI); V1 schemas are always `CREATE TABLE IF NOT EXISTS` shaped.
@@ -546,6 +575,7 @@ Notes:
 ## Task 4: Facet bundle builder
 
 **Files:**
+
 - Create: `src/facet/bundle.ts`
 - Create: `src/facet/bundle.test.ts`
 
@@ -591,7 +621,7 @@ export interface BuildFacetWorkerCodeInput {
  * V2 Pipedream will use it to pick the user's access token.
  */
 export function buildFacetWorkerCode(
-  input: BuildFacetWorkerCodeInput,
+  input: BuildFacetWorkerCodeInput
 ): WorkerCode {
   return {
     // Use a compatibility date close to today's. Must be >= the runtime's
@@ -601,13 +631,15 @@ export function buildFacetWorkerCode(
     modules: {
       "main.js": FACET_WRAPPER_SOURCE,
       "schema.js": `export const SCHEMA_DDL = ${JSON.stringify(input.schemaDdl)};\n`,
-      "handler.js": input.handlerCode,
+      "handler.js": input.handlerCode
     },
     // Type assertion: workerExports is typed as unknown in @cloudflare/workers-types;
     // the runtime supplies HttpGateway because we export it from src/server.ts.
     globalOutbound: (
-      workerExports as unknown as { HttpGateway: (opts: { props: unknown }) => unknown }
-    ).HttpGateway({ props: { userId: input.userId } }),
+      workerExports as unknown as {
+        HttpGateway: (opts: { props: unknown }) => unknown;
+      }
+    ).HttpGateway({ props: { userId: input.userId } })
   };
 }
 ```
@@ -626,9 +658,9 @@ vi.mock("cloudflare:workers", async (importActual) => {
     exports: {
       HttpGateway: (opts: { props: unknown }) => ({
         __mockHttpGateway: true,
-        props: opts.props,
-      }),
-    },
+        props: opts.props
+      })
+    }
   };
 });
 
@@ -640,14 +672,14 @@ describe("buildFacetWorkerCode", () => {
     const code = buildFacetWorkerCode({
       schemaDdl: "CREATE TABLE issues (id TEXT PRIMARY KEY);",
       handlerCode: "export async function handleWebhook() {}",
-      userId: "user-abc",
+      userId: "user-abc"
     });
 
     expect(code.mainModule).toBe("main.js");
     expect(Object.keys(code.modules).sort()).toEqual([
       "handler.js",
       "main.js",
-      "schema.js",
+      "schema.js"
     ]);
   });
 
@@ -655,7 +687,7 @@ describe("buildFacetWorkerCode", () => {
     const code = buildFacetWorkerCode({
       schemaDdl: "anything",
       handlerCode: "anything",
-      userId: "u",
+      userId: "u"
     });
     expect(code.modules["main.js"]).toBe(FACET_WRAPPER_SOURCE);
   });
@@ -668,11 +700,11 @@ describe("buildFacetWorkerCode", () => {
     const code = buildFacetWorkerCode({
       schemaDdl: tricky,
       handlerCode: "export async function handleWebhook() {}",
-      userId: "u",
+      userId: "u"
     });
 
     expect(code.modules["schema.js"]).toBe(
-      `export const SCHEMA_DDL = ${JSON.stringify(tricky)};\n`,
+      `export const SCHEMA_DDL = ${JSON.stringify(tricky)};\n`
     );
 
     // Round-trip safety: evaluating the module should produce the original string.
@@ -685,11 +717,11 @@ describe("buildFacetWorkerCode", () => {
     const code = buildFacetWorkerCode({
       schemaDdl: "x",
       handlerCode: "y",
-      userId: "user-xyz",
+      userId: "user-xyz"
     });
     expect(code.globalOutbound).toMatchObject({
       __mockHttpGateway: true,
-      props: { userId: "user-xyz" },
+      props: { userId: "user-xyz" }
     });
   });
 });
@@ -700,6 +732,7 @@ describe("buildFacetWorkerCode", () => {
 ## Task 5: Facet loader helper
 
 **Files:**
+
 - Create: `src/facet/loader.ts`
 
 Thin wrapper: takes an agent DO context (`this.ctx` + `this.env`), a sync record, and the userId; calls `env.LOADER.get(...)` and `ctx.facets.get(...)`, returns the facet stub. This is the one-line API the `create_sync` tool uses.
@@ -741,7 +774,7 @@ type DurableObjectClass = unknown;
 export interface WorkerLoaderLike {
   get(
     id: string,
-    callback: () => Promise<unknown>,
+    callback: () => Promise<unknown>
   ): {
     getDurableObjectClass(className: string): DurableObjectClass;
   };
@@ -753,7 +786,9 @@ export interface WorkerLoaderLike {
 export interface FacetsApi {
   get(
     name: string,
-    callback: () => { class: DurableObjectClass } | Promise<{ class: DurableObjectClass }>,
+    callback: () =>
+      | { class: DurableObjectClass }
+      | Promise<{ class: DurableObjectClass }>
   ): FacetStub;
   abort(name: string, reason?: unknown): void;
   delete(name: string): void;
@@ -771,7 +806,7 @@ export function attachFacet(
   env: { LOADER: WorkerLoaderLike },
   facets: FacetsApi,
   sync: Sync,
-  userId: string,
+  userId: string
 ): FacetStub {
   const codeId = syncCodeId(sync);
   return facets.get(sync.name, async () => {
@@ -779,8 +814,8 @@ export function attachFacet(
       buildFacetWorkerCode({
         schemaDdl: sync.schema_ddl,
         handlerCode: sync.handler_code,
-        userId,
-      }),
+        userId
+      })
     );
     return { class: worker.getDurableObjectClass("App") };
   });
@@ -788,6 +823,7 @@ export function attachFacet(
 ```
 
 Notes:
+
 - No tests for this file directly — behavior is exercised by the integration test in Task 9.
 - Type shapes kept local to avoid tangling with `@cloudflare/workers-types` drift. The boundary is narrow (`env.LOADER`, `ctx.facets`) so we can afford local `interface`s.
 
@@ -796,6 +832,7 @@ Notes:
 ## Task 6: `create_sync` tool
 
 **Files:**
+
 - Create: `src/agent/tools/write/create-sync.ts`
 - Create: `src/agent/tools/write/create-sync.test.ts`
 
@@ -811,7 +848,7 @@ import { createSync, getSyncByName } from "../../../db/syncs";
 import {
   registerLinearWebhook,
   unregisterLinearWebhook,
-  LinearApiError,
+  LinearApiError
 } from "../../../integrations/linear-api";
 import { attachFacet } from "../../../facet/loader";
 import type { Integration, NewSync } from "../../../db/types";
@@ -836,30 +873,28 @@ export function createSyncTool(agent: ChatAgent) {
         .max(64)
         .regex(
           /^[a-zA-Z0-9_-]+$/,
-          "name must be alphanumeric + hyphens/underscores only (it is used as the facet name)",
+          "name must be alphanumeric + hyphens/underscores only (it is used as the facet name)"
         )
         .describe(
-          "User-visible sync label. Must be unique per user. Also used as the facet's name.",
+          "User-visible sync label. Must be unique per user. Also used as the facet's name."
         ),
-      integration: z
-        .enum(["linear"])
-        .describe("V1 supports 'linear' only."),
+      integration: z.enum(["linear"]).describe("V1 supports 'linear' only."),
       schema_ddl: z
         .string()
         .describe(
-          "SQL DDL statements for the facet's SQLite, separated by semicolons. Use CREATE TABLE IF NOT EXISTS so re-applying is idempotent.",
+          "SQL DDL statements for the facet's SQLite, separated by semicolons. Use CREATE TABLE IF NOT EXISTS so re-applying is idempotent."
         ),
       handler_code: z
         .string()
         .describe(
-          "JavaScript module source that exports handleWebhook(request, sql). See system prompt for exact contract.",
+          "JavaScript module source that exports handleWebhook(request, sql). See system prompt for exact contract."
         ),
       filter_description: z
         .string()
         .optional()
         .describe(
-          "One-line human summary of what this sync tracks, e.g. 'only issues labeled bug in Core team'. Displayed in the UI and in ambient context.",
-        ),
+          "One-line human summary of what this sync tracks, e.g. 'only issues labeled bug in Core team'. Displayed in the UI and in ambient context."
+        )
     }),
     needsApproval: true,
     execute: async ({
@@ -867,7 +902,7 @@ export function createSyncTool(agent: ChatAgent) {
       integration,
       schema_ddl,
       handler_code,
-      filter_description,
+      filter_description
     }): Promise<
       | { ok: true; sync_id: string; linear_webhook_id: string }
       | { ok: false; error: string; detail: string }
@@ -880,7 +915,7 @@ export function createSyncTool(agent: ChatAgent) {
         return {
           ok: false,
           error: "duplicate_name",
-          detail: `A sync named "${name}" already exists for this user.`,
+          detail: `A sync named "${name}" already exists for this user.`
         };
       }
 
@@ -896,7 +931,7 @@ export function createSyncTool(agent: ChatAgent) {
           agent.env.LINEAR_ACCESS_TOKEN,
           webhookUrl,
           resourceTypesFor(integration),
-          webhookLabel,
+          webhookLabel
         );
       } catch (e) {
         if (e instanceof LinearApiError) {
@@ -917,7 +952,7 @@ export function createSyncTool(agent: ChatAgent) {
         filter_description: filter_description ?? null,
         webhook_secret: registered.secret,
         upstream_webhook_id: registered.id,
-        code_id: codeId,
+        code_id: codeId
       };
 
       let created;
@@ -929,7 +964,7 @@ export function createSyncTool(agent: ChatAgent) {
         return {
           ok: false,
           error: "persist_failed",
-          detail: e instanceof Error ? e.message : String(e),
+          detail: e instanceof Error ? e.message : String(e)
         };
       }
 
@@ -941,17 +976,17 @@ export function createSyncTool(agent: ChatAgent) {
           { LOADER: agent.env.LOADER as unknown as WorkerLoaderLike },
           agent.ctx.facets as unknown as FacetsApi,
           created,
-          userId,
+          userId
         );
         // Trigger facet initialization (wrapper applies schema on first fetch).
         // We hit a no-op health-check path; wrapper still applies schema because
         // it runs on EVERY fetch until #schemaApplied is true.
         const initResponse = await facet.fetch(
-          new Request("https://facet.internal/__init__", { method: "POST" }),
+          new Request("https://facet.internal/__init__", { method: "POST" })
         );
         if (initResponse.status >= 500) {
           throw new Error(
-            `Facet init returned ${initResponse.status} — handler likely threw before returning.`,
+            `Facet init returned ${initResponse.status} — handler likely threw before returning.`
           );
         }
       } catch (e) {
@@ -967,16 +1002,16 @@ export function createSyncTool(agent: ChatAgent) {
         return {
           ok: false,
           error: "facet_load_failed",
-          detail: e instanceof Error ? e.message : String(e),
+          detail: e instanceof Error ? e.message : String(e)
         };
       }
 
       return {
         ok: true,
         sync_id: syncId,
-        linear_webhook_id: registered.id,
+        linear_webhook_id: registered.id
       };
-    },
+    }
   });
 }
 
@@ -988,7 +1023,10 @@ function resourceTypesFor(integration: Integration): string[] {
   }
 }
 
-async function safeUnregister(accessToken: string, webhookId: string): Promise<void> {
+async function safeUnregister(
+  accessToken: string,
+  webhookId: string
+): Promise<void> {
   try {
     await unregisterLinearWebhook(accessToken, webhookId);
   } catch (e) {
@@ -997,7 +1035,7 @@ async function safeUnregister(accessToken: string, webhookId: string): Promise<v
     // out-of-band via Linear UI if this ever happens in practice.
     console.error(
       `safeUnregister: failed to unregister ${webhookId}:`,
-      e instanceof Error ? e.message : e,
+      e instanceof Error ? e.message : e
     );
   }
 }
@@ -1019,11 +1057,10 @@ function getStub(userName: string) {
   return env.ChatAgent.get(env.ChatAgent.idFromName(userName));
 }
 
-async function ensureReady(
-  instance: unknown,
-  userName: string,
-): Promise<void> {
-  await (instance as { setName: (n: string) => Promise<void> }).setName(userName);
+async function ensureReady(instance: unknown, userName: string): Promise<void> {
+  await (instance as { setName: (n: string) => Promise<void> }).setName(
+    userName
+  );
 }
 
 const SAMPLE_HANDLER = `
@@ -1033,7 +1070,8 @@ export async function handleWebhook(request, sql) {
 }
 `;
 
-const SAMPLE_SCHEMA = "CREATE TABLE IF NOT EXISTS issues (id TEXT PRIMARY KEY, title TEXT);";
+const SAMPLE_SCHEMA =
+  "CREATE TABLE IF NOT EXISTS issues (id TEXT PRIMARY KEY, title TEXT);";
 
 describe("createSyncTool", () => {
   it("rejects duplicate sync names before touching the network", async () => {
@@ -1061,14 +1099,14 @@ describe("createSyncTool", () => {
           name: "taken-name",
           integration: "linear",
           schema_ddl: SAMPLE_SCHEMA,
-          handler_code: SAMPLE_HANDLER,
+          handler_code: SAMPLE_HANDLER
         },
-        {} as never,
+        {} as never
       );
 
       expect(result).toMatchObject({
         ok: false,
-        error: "duplicate_name",
+        error: "duplicate_name"
       });
     });
   });
@@ -1081,17 +1119,15 @@ describe("createSyncTool", () => {
     // registerLinearWebhook which uses the global fetch; we stub fetch
     // within the runInDurableObject closure.
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn(
-      async (url: RequestInfo | URL) => {
-        if (String(url).includes("api.linear.app")) {
-          return new Response(
-            JSON.stringify({ errors: [{ message: "simulated linear outage" }] }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        }
-        return originalFetch(url as never);
-      },
-    ) as typeof fetch;
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url).includes("api.linear.app")) {
+        return new Response(
+          JSON.stringify({ errors: [{ message: "simulated linear outage" }] }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      return originalFetch(url as never);
+    }) as typeof fetch;
 
     try {
       await runInDurableObject(stub, async (instance) => {
@@ -1102,15 +1138,15 @@ describe("createSyncTool", () => {
             name: "linear-bugs",
             integration: "linear",
             schema_ddl: SAMPLE_SCHEMA,
-            handler_code: SAMPLE_HANDLER,
+            handler_code: SAMPLE_HANDLER
           },
-          {} as never,
+          {} as never
         );
 
         expect(result).toMatchObject({
           ok: false,
           error: "linear_api_error",
-          detail: expect.stringMatching(/simulated linear outage/),
+          detail: expect.stringMatching(/simulated linear outage/)
         });
 
         // No sync row should have been persisted on Linear failure.
@@ -1131,6 +1167,7 @@ Note: we don't write a "happy path" unit test here because it needs a working fa
 ## Task 7: Register `create_sync` in `buildTools`
 
 **Files:**
+
 - Modify: `src/agent/tools/index.ts`
 
 - [ ] **Step 1: Import and register**
@@ -1150,7 +1187,7 @@ export function buildTools(agent: ChatAgent) {
     get_sync: getSyncTool(agent),
     get_sync_errors: getSyncErrorsTool(agent),
     web_search: webSearchTool(agent),
-    create_sync: createSyncTool(agent),
+    create_sync: createSyncTool(agent)
   };
 }
 ```
@@ -1160,6 +1197,7 @@ export function buildTools(agent: ChatAgent) {
 ## Task 8: Update system prompt
 
 **Files:**
+
 - Modify: `src/agent/system-prompt.ts`
 
 Update the "What you can do" and "How to handle unfamiliar shapes" sections to reflect create_sync availability, and add a new section "Drafting a sync" that teaches the exact handler.js contract.
@@ -1229,6 +1267,7 @@ Zero errors expected.
 ## Task 9: Integration test
 
 **Files:**
+
 - Create: `tests/create-sync-integration.test.ts`
 
 End-to-end test via `runInDurableObject` that mocks Linear's API and walks the happy path.
@@ -1251,38 +1290,42 @@ export async function handleWebhook(request, sql) {
 }
 `;
 
-const SAMPLE_SCHEMA = "CREATE TABLE IF NOT EXISTS issues (id TEXT PRIMARY KEY);";
+const SAMPLE_SCHEMA =
+  "CREATE TABLE IF NOT EXISTS issues (id TEXT PRIMARY KEY);";
 
 function stubLinearFetch(): () => void {
   const original = globalThis.fetch;
-  globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-    if (!String(url).includes("api.linear.app")) return original(url as never, init as never);
-    const body = JSON.parse(init!.body as string);
-    if (body.query.includes("webhookCreate")) {
-      return new Response(
-        JSON.stringify({
-          data: {
-            webhookCreate: {
-              success: true,
-              webhook: {
-                id: `wh_stub_${body.variables.label}`,
-                secret: `sec_stub_${body.variables.label}`,
-                enabled: true,
-              },
-            },
-          },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+  globalThis.fetch = vi.fn(
+    async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(url).includes("api.linear.app"))
+        return original(url as never, init as never);
+      const body = JSON.parse(init!.body as string);
+      if (body.query.includes("webhookCreate")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              webhookCreate: {
+                success: true,
+                webhook: {
+                  id: `wh_stub_${body.variables.label}`,
+                  secret: `sec_stub_${body.variables.label}`,
+                  enabled: true
+                }
+              }
+            }
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      if (body.query.includes("webhookDelete")) {
+        return new Response(
+          JSON.stringify({ data: { webhookDelete: { success: true } } }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      }
+      return new Response("{}", { status: 500 });
     }
-    if (body.query.includes("webhookDelete")) {
-      return new Response(
-        JSON.stringify({ data: { webhookDelete: { success: true } } }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }
-    return new Response("{}", { status: 500 });
-  }) as typeof fetch;
+  ) as typeof fetch;
   return () => {
     globalThis.fetch = original;
   };
@@ -1305,14 +1348,14 @@ describe("create_sync end-to-end", () => {
             integration: "linear",
             schema_ddl: SAMPLE_SCHEMA,
             handler_code: SAMPLE_HANDLER,
-            filter_description: "all Linear issues",
+            filter_description: "all Linear issues"
           },
-          {} as never,
+          {} as never
         );
 
         if (!("ok" in result) || result.ok !== true) {
           throw new Error(
-            `Expected ok: true, got: ${JSON.stringify(result, null, 2)}`,
+            `Expected ok: true, got: ${JSON.stringify(result, null, 2)}`
           );
         }
         expect(result.linear_webhook_id).toMatch(/^wh_stub_/);
@@ -1354,14 +1397,14 @@ describe("create_sync end-to-end", () => {
             name: "linear-rollback",
             integration: "linear",
             schema_ddl: SAMPLE_SCHEMA,
-            handler_code: BROKEN_HANDLER,
+            handler_code: BROKEN_HANDLER
           },
-          {} as never,
+          {} as never
         );
 
         expect(result).toMatchObject({
           ok: false,
-          error: "facet_load_failed",
+          error: "facet_load_failed"
         });
 
         // DB row must have been rolled back.
@@ -1375,7 +1418,7 @@ describe("create_sync end-to-end", () => {
           (args) =>
             args[1] != null &&
             typeof (args[1] as RequestInit).body === "string" &&
-            ((args[1] as RequestInit).body as string).includes("webhookDelete"),
+            ((args[1] as RequestInit).body as string).includes("webhookDelete")
         );
         expect(webhookDeleteCalled).toBe(true);
       });

@@ -15,7 +15,8 @@ export default defineWorkersConfig({
             // real LLM calls should mock the Anthropic SDK explicitly.
             ANTHROPIC_API_KEY: "test-stub-key",
             PARALLEL_API_KEY: "test-stub-key",
-            LINEAR_ACCESS_TOKEN: "test-stub-token"
+            LINEAR_ACCESS_TOKEN: "test-stub-token",
+            PUBLIC_BASE_URL: "https://test.invalid"
           }
         }
       }
