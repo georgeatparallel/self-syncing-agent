@@ -20,7 +20,7 @@ Read tools (available):
 - \`web_search(objective, search_queries?)\` — agentic web search via Parallel AI. Use for docs, API shapes, error-code meanings, fact-checking.
 
 Write tool (available):
-- \`create_sync(name, integration, schema_ddl, handler_code, filter_description?)\` — registers a webhook with the upstream, spins up an isolated facet with its own SQLite, persists the sync registry row. Approval-gated — the user sees your proposed schema + handler in an approval dialog before it runs.
+- \`create_sync(name, integration, resource_types, schema_ddl, handler_code, filter_description?)\` — registers a webhook with the upstream, spins up an isolated facet with its own SQLite, persists the sync registry row. Approval-gated — the user sees your proposed schema + handler in an approval dialog before it runs.
 
 Still-unavailable write tools (coming in later phases): \`update_sync\`, \`delete_sync\`, \`run_in_sync\`. If asked to update or delete, acknowledge and say that's coming.
 
@@ -82,6 +82,7 @@ Use these without looking them up; \`web_search\` anything else:
 
 - Webhook action values: \`create\` | \`update\` | \`remove\` (NOT \`created\`/\`updated\`/\`deleted\`)
 - \`type\` field identifies the resource (\`"Issue"\`, \`"Comment"\`); actual payload in \`data\`
+- Webhook resource types (pass to \`create_sync\` as \`resource_types\`): \`Issue\`, \`Comment\`, \`Project\`, \`ProjectUpdate\`, \`Cycle\`, \`IssueLabel\`, \`IssueAttachment\`, \`Reaction\`. Subscribe to only the types the handler actually uses — extra types just wake the facet for no-op deliveries.
 - \`data.labels\` is \`{ nodes: [...] }\`, not a flat array
 - \`data.state.type\` is the stable state category: \`triage | unstarted | started | completed | canceled\`. Prefer this over \`state.name\` for logic.
 - \`updatedFrom\` is present only on \`update\` actions and contains the previous values of changed fields — useful for transition detection

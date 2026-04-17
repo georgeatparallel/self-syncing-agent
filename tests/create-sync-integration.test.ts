@@ -119,6 +119,7 @@ describe("create_sync end-to-end", () => {
             {
               name: "linear-issues",
               integration: "linear",
+              resource_types: ["Issue"],
               schema_ddl: SAMPLE_SCHEMA,
               handler_code: SAMPLE_HANDLER,
               filter_description: "all Linear issues"
@@ -185,6 +186,7 @@ describe("create_sync end-to-end", () => {
             {
               name: "linear-rollback",
               integration: "linear",
+              resource_types: ["Issue"],
               schema_ddl: SAMPLE_SCHEMA,
               handler_code: SAMPLE_HANDLER
             },

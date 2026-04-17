@@ -8,15 +8,7 @@ import {
   LinearApiError
 } from "../../../integrations/linear-api";
 import { attachFacet } from "../../../facet/loader";
-import type { Integration, NewSync } from "../../../db/types";
-
-/**
- * Resource types passed to Linear's webhookCreate per integration + sync.
- * For V1 we only support Linear's Issue resource, but sync creation could
- * later allow the agent to pick different resource types (e.g., Comments,
- * Cycles). For now it's fixed.
- */
-const LINEAR_DEFAULT_RESOURCE_TYPES = ["Issue"];
+import type { NewSync } from "../../../db/types";
 
 export function createSyncTool(agent: ChatAgent) {
   return tool({
@@ -35,6 +27,12 @@ export function createSyncTool(agent: ChatAgent) {
           "User-visible sync label. Must be unique per user. Also used as the facet's name."
         ),
       integration: z.enum(["linear"]).describe("V1 supports 'linear' only."),
+      resource_types: z
+        .array(z.string().min(1))
+        .min(1)
+        .describe(
+          "Upstream resource types to subscribe the webhook to. For Linear: 'Issue', 'Comment', 'Project', 'ProjectUpdate', 'Cycle', 'IssueLabel', 'IssueAttachment', 'Reaction'. Pick the minimal set that covers the user's ask — fewer types means fewer no-op webhook deliveries."
+        ),
       schema_ddl: z
         .string()
         .describe(
@@ -56,6 +54,7 @@ export function createSyncTool(agent: ChatAgent) {
     execute: async ({
       name,
       integration,
+      resource_types,
       schema_ddl,
       handler_code,
       filter_description
@@ -99,7 +98,7 @@ export function createSyncTool(agent: ChatAgent) {
         registered = await registerLinearWebhook(
           agent.env.LINEAR_ACCESS_TOKEN,
           webhookUrl,
-          resourceTypesFor(integration),
+          resource_types,
           webhookLabel
         );
       } catch (e) {
@@ -177,14 +176,6 @@ export function createSyncTool(agent: ChatAgent) {
       };
     }
   });
-}
-
-function resourceTypesFor(integration: Integration): string[] {
-  switch (integration) {
-    case "linear":
-      return LINEAR_DEFAULT_RESOURCE_TYPES;
-    // default case unreachable while Integration = "linear"
-  }
 }
 
 async function safeUnregister(

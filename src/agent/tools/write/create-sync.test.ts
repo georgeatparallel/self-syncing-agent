@@ -52,6 +52,7 @@ describe("createSyncTool", () => {
         {
           name: "taken-name",
           integration: "linear",
+          resource_types: ["Issue"],
           schema_ddl: SAMPLE_SCHEMA,
           handler_code: SAMPLE_HANDLER
         },
@@ -93,6 +94,7 @@ describe("createSyncTool", () => {
           {
             name: "linear-bugs",
             integration: "linear",
+            resource_types: ["Issue"],
             schema_ddl: SAMPLE_SCHEMA,
             handler_code: SAMPLE_HANDLER
           },
