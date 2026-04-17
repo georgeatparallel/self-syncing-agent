@@ -389,8 +389,8 @@ All of these must be true and demonstrable:
 
 1. **Cross-user isolation** — each user is one DO. No DO has read access to another DO's storage. DO names are UUIDs.
 2. **Facet ↔ Supervisor isolation** — facet code cannot read supervisor SQLite. Each facet has its own isolated SQLite. (Confirmed from Cloudflare docs.)
-3. **Facet ↔ Network isolation** — `globalOutbound: env.PROXY` on every facet. No raw network egress. Proxy rejects unknown hosts with 403.
-4. **Credential isolation** — V1 integration secrets live only in Worker env. They are read by the proxy when injecting auth. They are never passed into facet environments.
+3. **Facet ↔ Network isolation** — `globalOutbound: ctx.exports.HttpGateway({ props: { userId } })` on every facet. No raw network egress. Gateway rejects unknown hosts with 403.
+4. **Credential isolation** — V1 integration secrets live only in Worker env. They are read by the gateway (`HttpGateway`) when injecting auth. They are never passed into facet environments.
 5. **Ad-hoc code isolation** — `run_in_sync` reuses the target sync's facet; same sandbox, same proxy, same SQLite scope. It cannot reach other syncs or supervisor state.
 6. **Supervisor-only services** — `api.anthropic.com` and `api.parallel.ai` are called by the supervisor DO directly, using env secrets. They are unreachable from facet code.
 
