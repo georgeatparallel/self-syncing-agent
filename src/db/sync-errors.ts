@@ -1,9 +1,4 @@
-import type { SyncError, NewSyncError, SyncErrorStat } from "./types";
-
-type SqlTag = <T = Record<string, string | number | boolean | null>>(
-  strings: TemplateStringsArray,
-  ...values: (string | number | boolean | null)[]
-) => T[];
+import type { SyncError, NewSyncError, SyncErrorStat, SqlTag } from "./types";
 
 export function logSyncError(sql: SqlTag, input: NewSyncError): void {
   sql`
@@ -45,7 +40,7 @@ export function getSyncErrorStats(
       (
         SELECT error_message FROM sync_errors s2
         WHERE s2.sync_id = s1.sync_id AND s2.occurred_at >= ${sinceMs}
-        ORDER BY occurred_at DESC LIMIT 1
+        ORDER BY occurred_at DESC, id DESC LIMIT 1
       ) as last_error_message
     FROM sync_errors s1
     WHERE occurred_at >= ${sinceMs}

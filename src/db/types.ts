@@ -11,6 +11,20 @@
 
 export type Integration = "linear" | "github";
 
+/**
+ * Shape of `this.sql` exposed by the Cloudflare Agents SDK on the Agent
+ * base class. Tagged template that returns an array of rows. Narrowed
+ * here to what SQLite-in-DO can actually bind: string | number | boolean | null.
+ *
+ * Declared once and shared across all repo modules; importing this from
+ * src/db/types.ts keeps the three repo files in lockstep whenever the
+ * SDK's signature drifts.
+ */
+export type SqlTag = <T = Record<string, string | number | boolean | null>>(
+  strings: TemplateStringsArray,
+  ...values: (string | number | boolean | null)[]
+) => T[];
+
 export interface Sync {
   id: string;
   name: string;

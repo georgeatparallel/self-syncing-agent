@@ -9,10 +9,7 @@
  * statements — existing DOs already have the old tables.
  */
 
-type SqlTag = <T = Record<string, string | number | boolean | null>>(
-  strings: TemplateStringsArray,
-  ...values: (string | number | boolean | null)[]
-) => T[];
+import type { SqlTag } from "./types";
 
 export function applySchemaMigrations(sql: SqlTag): void {
   sql`

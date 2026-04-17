@@ -1,9 +1,4 @@
-import type { Sync, NewSync, SyncPatch } from "./types";
-
-type SqlTag = <T = Record<string, string | number | boolean | null>>(
-  strings: TemplateStringsArray,
-  ...values: (string | number | boolean | null)[]
-) => T[];
+import type { Sync, NewSync, SyncPatch, SqlTag } from "./types";
 
 export function createSync(sql: SqlTag, input: NewSync): Sync {
   const now = Date.now();

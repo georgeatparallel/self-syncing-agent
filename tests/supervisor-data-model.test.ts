@@ -238,11 +238,6 @@ describe("supervisor data model", () => {
           error_message: "old boom",
           handler_version: 1
         });
-        // Same 2ms delay the sibling "logs and lists errors" test uses:
-        // without it both inserts share a Date.now() millisecond and the
-        // subquery's ORDER BY occurred_at DESC LIMIT 1 picks by SQLite's
-        // tiebreaker (insertion order ASC), returning "old boom".
-        await new Promise((r) => setTimeout(r, 2));
         logSyncError(sql, {
           sync_id: sync.id,
           error_message: "new boom",
