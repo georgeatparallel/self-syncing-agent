@@ -55,9 +55,9 @@ const client = new Parallel({ apiKey: env.PARALLEL_API_KEY });
 
 const result = await client.beta.search({
   objective: "...",
-  search_queries: ["q1", "q2"] ?? null,   // optional
-  mode: "agentic",                          // or "fast"
-  excerpts: { max_chars_per_result: 4000 },
+  search_queries: ["q1", "q2"] ?? null, // optional
+  mode: "agentic", // or "fast"
+  excerpts: { max_chars_per_result: 4000 }
 });
 
 // Typed result:
@@ -71,6 +71,7 @@ const result = await client.beta.search({
 Typed errors: `APIError`, `AuthenticationError`, `RateLimitError`, `InternalServerError`, etc. — all extend `ParallelError`.
 
 Why the SDK over bare fetch:
+
 - Typed request + response (no hand-rolled interfaces that drift from API)
 - Typed error subclasses (we can surface rate-limit/auth errors distinctly)
 - Free upgrade path when Parallel ships new fields or endpoints
@@ -96,6 +97,7 @@ For Phase 04, all tools have `execute` (server-side). No `needsApproval` — the
 ## Task 1: Install `parallel-web` SDK + wire `PARALLEL_API_KEY`
 
 **Files:**
+
 - Modify: `package.json`, `pnpm-lock.yaml`, `.dev.vars.example`, `.dev.vars`, `vitest.config.ts`, `env.d.ts` (regenerated)
 
 - [ ] **Step 1: Install the Parallel SDK**
@@ -147,6 +149,7 @@ Expected: `env.d.ts` now includes `PARALLEL_API_KEY: string` in the `Cloudflare.
 ## Task 2: System prompt placeholder module
 
 **Files:**
+
 - Create: `src/agent/system-prompt.ts`
 
 - [ ] **Step 1: Create `src/agent/system-prompt.ts` with exactly this content:**
@@ -184,6 +187,7 @@ Be direct and helpful. Lead with the answer, then add context if needed.`;
 ## Task 3: Context module + tests (TDD)
 
 **Files:**
+
 - Create: `src/agent/context.test.ts` (first)
 - Create: `src/agent/context.ts`
 
@@ -210,7 +214,7 @@ function sampleSync(overrides: Partial<Sync> = {}): Sync {
     version: 1,
     created_at: 1_000_000,
     updated_at: 1_000_000,
-    ...overrides,
+    ...overrides
   };
 }
 
@@ -225,7 +229,7 @@ describe("formatActiveSyncs", () => {
   it("formats a populated list as a markdown table with id/name/integration", () => {
     const output = formatActiveSyncs([
       sampleSync({ id: "s-1", name: "linear_bugs", integration: "linear" }),
-      sampleSync({ id: "s-2", name: "linear_cycles", integration: "linear" }),
+      sampleSync({ id: "s-2", name: "linear_cycles", integration: "linear" })
     ]);
     expect(output).toContain("<active_syncs>");
     expect(output).toContain("| sync_id | name | integration |");
@@ -249,9 +253,10 @@ describe("formatSyncErrors", () => {
       {
         sync_id: "s-1",
         error_count: 7,
-        last_error_message: "TypeError: Cannot read property 'team' of undefined",
-        last_occurred_at: 1_700_000_000,
-      },
+        last_error_message:
+          "TypeError: Cannot read property 'team' of undefined",
+        last_occurred_at: 1_700_000_000
+      }
     ];
     const output = formatSyncErrors(stats);
     expect(output).toContain("<sync_errors>");
@@ -267,8 +272,8 @@ describe("formatSyncErrors", () => {
         sync_id: "s-1",
         error_count: 1,
         last_error_message: longMessage,
-        last_occurred_at: 1_700_000_000,
-      },
+        last_occurred_at: 1_700_000_000
+      }
     ]);
     // We don't need an exact cap; just confirm the formatter doesn't
     // pipe 500 literal chars into the table. Anywhere between 100-300
@@ -311,7 +316,7 @@ export function buildContextMessages(sql: SqlTag): ModelMessage[] {
   const errorStats = getSyncErrorStats(sql, Date.now() - ERROR_WINDOW_MS);
   return [
     { role: "user", content: formatActiveSyncs(syncs) },
-    { role: "user", content: formatSyncErrors(errorStats) },
+    { role: "user", content: formatSyncErrors(errorStats) }
   ];
 }
 
@@ -367,6 +372,7 @@ Expected: 5 tests pass.
 Each tool gets its own file under `src/agent/tools/read/`. Each file exports a factory function `<name>Tool(agent)` that returns a configured `Tool` object.
 
 **Files:**
+
 - Create: `src/agent/tools/read/list-syncs.ts`
 - Create: `src/agent/tools/read/get-sync.ts`
 - Create: `src/agent/tools/read/get-sync-errors.ts`
@@ -396,10 +402,10 @@ export function listSyncsTool(agent: ChatAgent) {
           integration: s.integration,
           version: s.version,
           created_at: s.created_at,
-          updated_at: s.updated_at,
-        })),
+          updated_at: s.updated_at
+        }))
       };
-    },
+    }
   });
 }
 ```
@@ -418,7 +424,7 @@ export function getSyncTool(agent: ChatAgent) {
     description:
       "Get full detail for a single sync — handler code, schema DDL, filter description, version, timestamps, and the 5 most-recent errors. Use when the user asks to see or discuss a specific sync.",
     inputSchema: z.object({
-      sync_id: z.string().describe("The sync's UUID"),
+      sync_id: z.string().describe("The sync's UUID")
     }),
     execute: async ({ sync_id }) => {
       const sql = agent.sql.bind(agent);
@@ -440,10 +446,10 @@ export function getSyncTool(agent: ChatAgent) {
         recent_errors: recentErrors.map((e) => ({
           occurred_at: e.occurred_at,
           error_message: e.error_message,
-          handler_version: e.handler_version,
-        })),
+          handler_version: e.handler_version
+        }))
       };
-    },
+    }
   });
 }
 ```
@@ -462,7 +468,7 @@ export function getSyncErrorsTool(agent: ChatAgent) {
       "List recent runtime errors for a sync, newest first. Use when diagnosing why a sync is failing or when the user asks about error details. The ambient <sync_errors> context only shows the most recent message per sync; call this for full history with stack traces and payload previews.",
     inputSchema: z.object({
       sync_id: z.string().describe("The sync's UUID"),
-      limit: z.number().int().positive().max(100).default(20),
+      limit: z.number().int().positive().max(100).default(20)
     }),
     execute: async ({ sync_id, limit }) => {
       const sql = agent.sql.bind(agent);
@@ -475,10 +481,10 @@ export function getSyncErrorsTool(agent: ChatAgent) {
           error_message: e.error_message,
           stack_trace: e.stack_trace,
           payload_preview: e.payload_preview,
-          handler_version: e.handler_version,
-        })),
+          handler_version: e.handler_version
+        }))
       };
-    },
+    }
   });
 }
 ```
@@ -502,15 +508,15 @@ export function webSearchTool(agent: ChatAgent) {
       objective: z
         .string()
         .describe(
-          "Natural-language description of what you're trying to find. Keep it focused on ONE concrete question — this drives quality more than keyword queries.",
+          "Natural-language description of what you're trying to find. Keep it focused on ONE concrete question — this drives quality more than keyword queries."
         ),
       search_queries: z
         .array(z.string().max(200))
         .max(5)
         .optional()
         .describe(
-          "(optional) Up to 5 keyword queries (≤200 chars each) to seed the search. Leave unset for agentic-mode default behavior.",
-        ),
+          "(optional) Up to 5 keyword queries (≤200 chars each) to seed the search. Leave unset for agentic-mode default behavior."
+        )
     }),
     execute: async ({ objective, search_queries }) => {
       const client = new Parallel({ apiKey: agent.env.PARALLEL_API_KEY });
@@ -519,7 +525,7 @@ export function webSearchTool(agent: ChatAgent) {
           objective,
           search_queries: search_queries ?? null,
           mode: DEFAULT_MODE,
-          excerpts: { max_chars_per_result: DEFAULT_EXCERPT_CHARS },
+          excerpts: { max_chars_per_result: DEFAULT_EXCERPT_CHARS }
         });
         return {
           objective,
@@ -529,20 +535,20 @@ export function webSearchTool(agent: ChatAgent) {
             url: r.url,
             title: r.title ?? null,
             excerpts: r.excerpts ?? [],
-            publish_date: r.publish_date ?? null,
-          })),
+            publish_date: r.publish_date ?? null
+          }))
         };
       } catch (e) {
         if (e instanceof APIError) {
           return {
             error: "parallel_ai_request_failed",
             status: e.status,
-            detail: e.message,
+            detail: e.message
           };
         }
         throw e;
       }
-    },
+    }
   });
 }
 ```
@@ -573,7 +579,7 @@ export function buildTools(agent: ChatAgent) {
     list_syncs: listSyncsTool(agent),
     get_sync: getSyncTool(agent),
     get_sync_errors: getSyncErrorsTool(agent),
-    web_search: webSearchTool(agent),
+    web_search: webSearchTool(agent)
   };
 }
 ```
@@ -585,6 +591,7 @@ export function buildTools(agent: ChatAgent) {
 This is the biggest single diff in the phase. The starter's inline tools and `inlineDataUrls` helper get deleted. The `onChatMessage` body becomes orchestration over the extracted modules.
 
 **Files:**
+
 - Modify: `src/server.ts`
 
 - [ ] **Step 1: Replace the file with this content**
@@ -613,14 +620,14 @@ export class ChatAgent extends AIChatAgent<Env> {
         if (result.authSuccess) {
           return new Response("<script>window.close();</script>", {
             headers: { "content-type": "text/html" },
-            status: 200,
+            status: 200
           });
         }
         return new Response(
           `Authentication Failed: ${result.authError || "Unknown error"}`,
-          { headers: { "content-type": "text/plain" }, status: 400 },
+          { headers: { "content-type": "text/plain" }, status: 400 }
         );
-      },
+      }
     });
   }
 
@@ -640,7 +647,7 @@ export class ChatAgent extends AIChatAgent<Env> {
 
     const messages = [
       ...buildContextMessages(sql),
-      ...(await convertToModelMessages(this.messages)),
+      ...(await convertToModelMessages(this.messages))
     ];
 
     const mcpTools = this.mcp.getAITools();
@@ -652,17 +659,17 @@ export class ChatAgent extends AIChatAgent<Env> {
           type: "text",
           text: SYSTEM_PROMPT,
           providerOptions: {
-            anthropic: { cacheControl: { type: "ephemeral" } },
-          },
-        },
+            anthropic: { cacheControl: { type: "ephemeral" } }
+          }
+        }
       ],
       messages,
       tools: {
         ...mcpTools,
-        ...buildTools(this),
+        ...buildTools(this)
       },
       stopWhen: stepCountIs(5),
-      abortSignal: options?.abortSignal,
+      abortSignal: options?.abortSignal
     });
 
     return result.toUIMessageStreamResponse();
@@ -675,11 +682,12 @@ export default {
       (await routeAgentRequest(request, env)) ||
       new Response("Not found", { status: 404 })
     );
-  },
+  }
 } satisfies ExportedHandler<Env>;
 ```
 
 What's gone vs. the current file:
+
 - All starter demo tools (getWeather, getUserTimezone, calculate, scheduleTask, getScheduledTasks, cancelScheduledTask)
 - `inlineDataUrls` helper (we're text-only for V1; no image attachments)
 - `pruneMessages` usage (we're not pruning for V1 — history is small)
@@ -687,6 +695,7 @@ What's gone vs. the current file:
 - Import of `Schedule`, `getSchedulePrompt`, `scheduleSchema`, `pruneMessages`, `tool`, `z`, `ModelMessage` (no longer referenced here)
 
 What stays:
+
 - `@callable` methods for MCP (`addServer`, `removeServer`) — MCP is still supported even if not load-bearing for our agent
 - `onStart` schema migration call from Phase 02
 - `AIChatAgent` base class behavior (message persistence, WebSocket handling)
@@ -704,6 +713,7 @@ Expected: zero errors. If the circular import between `server.ts` → `tools/ind
 ## Task 6: Integration tests for read tools
 
 **Files:**
+
 - Create: `tests/agent-read-tools.test.ts`
 
 - [ ] **Step 1: Create `tests/agent-read-tools.test.ts` with exactly this content:**
@@ -733,7 +743,7 @@ function sampleSync(overrides: Partial<NewSync> = {}): NewSync {
     schema_ddl: "CREATE TABLE issues (id TEXT PRIMARY KEY)",
     webhook_secret: "test-secret",
     code_id: `code-${crypto.randomUUID().slice(0, 8)}`,
-    ...overrides,
+    ...overrides
   };
 }
 
@@ -741,7 +751,10 @@ function sampleSync(overrides: Partial<NewSync> = {}): NewSync {
  * Kick the Agents SDK lifecycle so onStart (and thus the schema
  * migration) fires. Same pattern as tests/supervisor-data-model.test.ts.
  */
-async function ensureReady(instance: InstanceType<typeof env.ChatAgent>, name: string) {
+async function ensureReady(
+  instance: InstanceType<typeof env.ChatAgent>,
+  name: string
+) {
   await instance.setName(name);
 }
 
@@ -784,8 +797,14 @@ describe("agent read tools", () => {
       await runInDurableObject(stub, async (instance) => {
         await ensureReady(instance, "read-get-missing");
         const tools = buildTools(instance);
-        const result = await tools.get_sync.execute!({ sync_id: "no-such-id" }, {} as never);
-        expect(result).toMatchObject({ error: "not_found", sync_id: "no-such-id" });
+        const result = await tools.get_sync.execute!(
+          { sync_id: "no-such-id" },
+          {} as never
+        );
+        expect(result).toMatchObject({
+          error: "not_found",
+          sync_id: "no-such-id"
+        });
       });
     });
 
@@ -798,7 +817,10 @@ describe("agent read tools", () => {
         createSync(sql, input);
 
         const tools = buildTools(instance);
-        const result = await tools.get_sync.execute!({ sync_id: input.id }, {} as never);
+        const result = await tools.get_sync.execute!(
+          { sync_id: input.id },
+          {} as never
+        );
         expect(result).toMatchObject({
           sync_id: input.id,
           name: "linear_bugs",
@@ -806,7 +828,7 @@ describe("agent read tools", () => {
           version: 1,
           handler_code: input.handler_code,
           schema_ddl: input.schema_ddl,
-          recent_errors: [],
+          recent_errors: []
         });
       });
     });
@@ -821,15 +843,18 @@ describe("agent read tools", () => {
         logSyncError(sql, {
           sync_id: input.id,
           error_message: "boom",
-          handler_version: 1,
+          handler_version: 1
         });
 
         const tools = buildTools(instance);
-        const result = await tools.get_sync.execute!({ sync_id: input.id }, {} as never);
+        const result = await tools.get_sync.execute!(
+          { sync_id: input.id },
+          {} as never
+        );
         expect(result.recent_errors).toHaveLength(1);
         expect(result.recent_errors[0]).toMatchObject({
           error_message: "boom",
-          handler_version: 1,
+          handler_version: 1
         });
       });
     });
@@ -847,7 +872,7 @@ describe("agent read tools", () => {
         const tools = buildTools(instance);
         const result = await tools.get_sync_errors.execute!(
           { sync_id: input.id, limit: 20 },
-          {} as never,
+          {} as never
         );
         expect(result).toMatchObject({ count: 0, errors: [] });
       });
@@ -863,23 +888,29 @@ describe("agent read tools", () => {
         logSyncError(sql, {
           sync_id: input.id,
           error_message: "first",
-          handler_version: 1,
+          handler_version: 1
         });
         await new Promise((r) => setTimeout(r, 2));
         logSyncError(sql, {
           sync_id: input.id,
           error_message: "second",
-          handler_version: 1,
+          handler_version: 1
         });
 
         const tools = buildTools(instance);
         const result = await tools.get_sync_errors.execute!(
           { sync_id: input.id, limit: 20 },
-          {} as never,
+          {} as never
         );
         expect(result.count).toBe(2);
-        expect(result.errors[0]).toMatchObject({ error_message: "second", handler_version: 1 });
-        expect(result.errors[1]).toMatchObject({ error_message: "first", handler_version: 1 });
+        expect(result.errors[0]).toMatchObject({
+          error_message: "second",
+          handler_version: 1
+        });
+        expect(result.errors[1]).toMatchObject({
+          error_message: "first",
+          handler_version: 1
+        });
       });
     });
   });
@@ -909,6 +940,7 @@ pnpm test
 Expected: **35 passing** across 6 test files.
 
 Breakdown:
+
 - tests/smoke.test.ts (1)
 - src/identity.test.ts (8)
 - tests/per-user-do.test.ts (2)
@@ -935,6 +967,7 @@ Expected: all four stages (oxfmt, oxlint, tsc, vitest) green.
 ## Task 8: Commit and push
 
 **Files:**
+
 - Phase 04 changes: `.dev.vars.example`, `vitest.config.ts`, `env.d.ts`, `src/server.ts`, new modules under `src/agent/`, new tests.
 
 - [ ] **Step 1: Stage and verify**

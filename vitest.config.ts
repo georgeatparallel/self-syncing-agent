@@ -13,7 +13,8 @@ export default defineWorkersConfig({
             // Stub secret for tests. Real value comes from .dev.vars in dev
             // and `wrangler secret put` in prod. Tests that need to simulate
             // real LLM calls should mock the Anthropic SDK explicitly.
-            ANTHROPIC_API_KEY: "test-stub-key"
+            ANTHROPIC_API_KEY: "test-stub-key",
+            PARALLEL_API_KEY: "test-stub-key"
           }
         }
       }
