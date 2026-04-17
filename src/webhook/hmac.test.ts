@@ -4,10 +4,12 @@ import { verifyLinearSignature } from "./hmac";
 const SECRET = "test-secret";
 const BODY = new TextEncoder().encode('{"hello":"world"}');
 
-async function sign(
-  bodyBytes: Uint8Array<ArrayBuffer>,
-  secret: string
-): Promise<string> {
+async function sign(bodyBytes: Uint8Array, secret: string): Promise<string> {
+  // TextEncoder.encode() is typed Uint8Array<ArrayBufferLike> under some
+  // toolchain views, but crypto.subtle.sign wants BufferSource =
+  // ArrayBufferView<ArrayBuffer>. Copy into a fresh Uint8Array<ArrayBuffer>
+  // to normalize.
+  const normalized = new Uint8Array(bodyBytes);
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -15,7 +17,7 @@ async function sign(
     false,
     ["sign"]
   );
-  const sig = await crypto.subtle.sign("HMAC", key, bodyBytes);
+  const sig = await crypto.subtle.sign("HMAC", key, normalized);
   return [...new Uint8Array(sig)]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");

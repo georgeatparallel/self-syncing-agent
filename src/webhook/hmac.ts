@@ -8,12 +8,8 @@
  * malformed hex, empty header. One code path for the caller — invalid
  * means 401.
  */
-// TS 6.0.2's BufferSource is ArrayBufferView<ArrayBuffer> — a bare
-// Uint8Array defaults to Uint8Array<ArrayBufferLike> and fails to
-// pass through to crypto.subtle.verify. Real callers (TextEncoder,
-// Request.arrayBuffer()) already produce the narrower type.
 export async function verifyLinearSignature(
-  bodyBytes: Uint8Array<ArrayBuffer>,
+  bodyBytes: Uint8Array,
   signatureHex: string,
   secret: string
 ): Promise<boolean> {
@@ -28,8 +24,19 @@ export async function verifyLinearSignature(
     ["verify"]
   );
 
+  // crypto.subtle.verify wants BufferSource = ArrayBufferView<ArrayBuffer>.
+  // Some toolchains view TextEncoder.encode() / new Uint8Array(arrayBuffer)
+  // as Uint8Array<ArrayBufferLike>, which doesn't match. Copy into a fresh
+  // Uint8Array<ArrayBuffer> to normalize the variance at the crypto boundary.
+  const normalizedBody = new Uint8Array(bodyBytes);
+
   try {
-    return await crypto.subtle.verify("HMAC", key, signatureBytes, bodyBytes);
+    return await crypto.subtle.verify(
+      "HMAC",
+      key,
+      signatureBytes,
+      normalizedBody
+    );
   } catch {
     // subtle.verify only throws on programmer errors (wrong algorithm,
     // wrong key usage). Bucket those into "invalid" so the route still

@@ -10,10 +10,13 @@ declare module "cloudflare:test" {
 
 const WEBHOOK_SECRET = "lin_wh_secret_abcdef";
 
-async function hmacHex(
-  body: Uint8Array<ArrayBuffer>,
-  secret: string
-): Promise<string> {
+async function hmacHex(body: Uint8Array, secret: string): Promise<string> {
+  // Copy into a fresh Uint8Array<ArrayBuffer>. TextEncoder.encode() is
+  // typed as Uint8Array<ArrayBufferLike> under some toolchain versions
+  // (editor-side TS vs project tsc can diverge), but crypto.subtle.sign
+  // strictly requires BufferSource = ArrayBufferView<ArrayBuffer>. The
+  // copy is cheap and normalizes away the variance.
+  const normalized = new Uint8Array(body);
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -21,7 +24,7 @@ async function hmacHex(
     false,
     ["sign"]
   );
-  const sig = await crypto.subtle.sign("HMAC", key, body);
+  const sig = await crypto.subtle.sign("HMAC", key, normalized);
   return [...new Uint8Array(sig)]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
