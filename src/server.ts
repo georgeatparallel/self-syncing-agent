@@ -6,6 +6,10 @@ import { applySchemaMigrations } from "./db/schema";
 import { buildContextMessages } from "./agent/context";
 import { buildTools } from "./agent/tools";
 import { SYSTEM_PROMPT } from "./agent/system-prompt";
+import { getSyncById } from "./db/syncs";
+import { logSyncError } from "./db/sync-errors";
+import { attachFacet } from "./facet/loader";
+import { verifyLinearSignature } from "./webhook/hmac";
 
 export { HttpGateway } from "./proxy/http-gateway";
 
@@ -49,6 +53,64 @@ export class ChatAgent extends AIChatAgent<Env> {
         );
       }
     });
+  }
+
+  async handleWebhookDelivery(
+    syncId: string,
+    bodyBytes: ArrayBuffer,
+    signatureHex: string | null
+  ): Promise<{ status: number; body: string }> {
+    const sql = this.sql.bind(this);
+    const sync = getSyncById(sql, syncId);
+    if (!sync) return { status: 404, body: "sync not found" };
+
+    const body = new Uint8Array(bodyBytes);
+    if (
+      !signatureHex ||
+      !(await verifyLinearSignature(body, signatureHex, sync.webhook_secret))
+    ) {
+      return { status: 401, body: "invalid signature" };
+    }
+
+    const userId = this.name;
+    const facet = attachFacet(this.env, this.ctx.facets, sync, userId);
+
+    // Rebuild a minimal Request for the facet. Agent handlers read the
+    // body via request.json(); headers beyond content-type are not part
+    // of the documented handler contract.
+    const facetRequest = new Request("https://facet.internal/webhook", {
+      method: "POST",
+      body: body,
+      headers: { "content-type": "application/json" }
+    });
+
+    try {
+      const facetResponse = await facet.fetch(facetRequest);
+      if (facetResponse.status >= 500) {
+        logSyncError(sql, {
+          sync_id: sync.id,
+          payload_preview: payloadPreview(body),
+          error_message: `facet returned ${facetResponse.status}`,
+          stack_trace: null,
+          handler_version: sync.version
+        });
+        return { status: 500, body: "handler failed" };
+      }
+      // 2xx or 4xx from the handler both mean "processed" from Linear's
+      // point of view — the handler intentionally returning 4xx is its
+      // way of saying "I saw this and dropped it". Either way, we tell
+      // Linear 200 so it doesn't retry.
+      return { status: 200, body: "ok" };
+    } catch (e) {
+      logSyncError(sql, {
+        sync_id: sync.id,
+        payload_preview: payloadPreview(body),
+        error_message: e instanceof Error ? e.message : String(e),
+        stack_trace: e instanceof Error ? (e.stack ?? null) : null,
+        handler_version: sync.version
+      });
+      return { status: 500, body: "handler failed" };
+    }
   }
 
   @callable()
@@ -102,3 +164,16 @@ export default {
     );
   }
 } satisfies ExportedHandler<Env>;
+
+/**
+ * First ~2KB of the raw webhook body, decoded as UTF-8. Stored on
+ * sync_errors rows so the agent can look at what actually arrived
+ * without re-asking Linear. Truncated hard at 2048 bytes; no attempt
+ * to avoid splitting a UTF-8 codepoint because lossy previews are
+ * fine for human debugging.
+ */
+const PAYLOAD_PREVIEW_MAX_BYTES = 2048;
+function payloadPreview(body: Uint8Array): string {
+  const slice = body.subarray(0, PAYLOAD_PREVIEW_MAX_BYTES);
+  return new TextDecoder("utf-8", { fatal: false }).decode(slice);
+}
