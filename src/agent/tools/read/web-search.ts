@@ -1,6 +1,10 @@
 import { tool } from "ai";
 import { z } from "zod";
-import Parallel, { APIError } from "parallel-web";
+import Parallel, {
+  APIError,
+  AuthenticationError,
+  RateLimitError
+} from "parallel-web";
 import type { ChatAgent } from "../../../server";
 
 const DEFAULT_MODE = "agentic" as const;
@@ -45,6 +49,16 @@ export function webSearchTool(agent: ChatAgent) {
           }))
         };
       } catch (e) {
+        // Narrow error surface so the agent can decide how to respond:
+        // back off on rate-limit vs. surface "key is bad" to the user vs.
+        // treat a generic 5xx as retryable. All three branches extend
+        // APIError, so order matters — check specific types first.
+        if (e instanceof RateLimitError) {
+          return { error: "parallel_ai_rate_limit", detail: e.message };
+        }
+        if (e instanceof AuthenticationError) {
+          return { error: "parallel_ai_auth_failed", detail: e.message };
+        }
         if (e instanceof APIError) {
           return {
             error: "parallel_ai_request_failed",
