@@ -16,8 +16,8 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
 }
 
 describe("handleGatewayRequest", () => {
-  it("injects Authorization: Bearer <LINEAR_ACCESS_TOKEN> for api.linear.app and forwards", async () => {
-    const env = makeEnv();
+  it("injects Authorization: Bearer <token> for OAuth tokens on api.linear.app and forwards", async () => {
+    const env = makeEnv({ LINEAR_ACCESS_TOKEN: "lin_oauth_test-token" });
     const forwarder = vi.fn(async (_req: Request) => {
       return new Response("ok from upstream", { status: 200 });
     });
@@ -44,9 +44,38 @@ describe("handleGatewayRequest", () => {
     expect(forwarded.url).toBe("https://api.linear.app/graphql");
     expect(forwarded.method).toBe("POST");
     expect(forwarded.headers.get("Authorization")).toBe(
-      "Bearer linear-test-token"
+      "Bearer lin_oauth_test-token"
     );
     expect(forwarded.headers.get("content-type")).toBe("application/json");
+  });
+
+  it("injects a bare personal API key (no Bearer prefix) for api.linear.app", async () => {
+    const env = makeEnv({ LINEAR_ACCESS_TOKEN: "lin_api_test-token" });
+    const forwarder = vi.fn(async (_req: Request) => {
+      return new Response("ok from upstream", { status: 200 });
+    });
+
+    const request = new Request("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "query { viewer { id } }" })
+    });
+
+    const response = await handleGatewayRequest(
+      request,
+      env,
+      { userId: "u-1" },
+      forwarder
+    );
+
+    expect(response.status).toBe(200);
+    expect(forwarder).toHaveBeenCalledTimes(1);
+    const forwarded = forwarder.mock.calls[0][0];
+    // Personal API keys must NOT be prefixed with Bearer — Linear rejects
+    // that with "It looks like you're trying to use an API key as a
+    // Bearer token." The linearAuthHeader helper branches on the
+    // lin_oauth_ prefix to distinguish.
+    expect(forwarded.headers.get("Authorization")).toBe("lin_api_test-token");
   });
 
   it("returns 403 with error JSON for unknown hosts and does NOT call the forwarder", async () => {

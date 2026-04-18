@@ -19,6 +19,7 @@
  */
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { linearAuthHeader } from "../integrations/linear-api";
 
 export interface HttpGatewayProps {
   /**
@@ -46,7 +47,7 @@ export async function handleGatewayRequest(
 
   switch (url.hostname) {
     case "api.linear.app":
-      headers.set("Authorization", `Bearer ${env.LINEAR_ACCESS_TOKEN}`);
+      headers.set("Authorization", linearAuthHeader(env.LINEAR_ACCESS_TOKEN));
       break;
     default:
       return new Response(

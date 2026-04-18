@@ -21,7 +21,7 @@ const LINEAR_API_URL = "https://api.linear.app/graphql";
  * require the prefix wrapping — personal API keys and any future
  * token format are passed through as-is.
  */
-function linearAuthHeader(accessToken: string): string {
+export function linearAuthHeader(accessToken: string): string {
   return accessToken.startsWith("lin_oauth_")
     ? `Bearer ${accessToken}`
     : accessToken;
