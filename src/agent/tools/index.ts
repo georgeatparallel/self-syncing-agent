@@ -6,6 +6,7 @@ import { webSearchTool } from "./read/web-search";
 import { createSyncTool } from "./write/create-sync";
 import { deleteSyncTool } from "./write/delete-sync";
 import { runInSyncTool } from "./write/run-in-sync";
+import { updateSyncTool } from "./write/update-sync";
 import type { ChatAgent } from "../../server";
 
 /**
@@ -17,7 +18,7 @@ import type { ChatAgent } from "../../server";
  * - create_sync (Phase 08, live)
  * - delete_sync (Phase 10, live)
  * - run_in_sync (Phase 11, live)
- * - update_sync (later phase)
+ * - update_sync (Phase 12, live)
  */
 export function buildTools(agent: ChatAgent) {
   return {
@@ -28,6 +29,7 @@ export function buildTools(agent: ChatAgent) {
     web_search: webSearchTool(agent),
     create_sync: createSyncTool(agent),
     delete_sync: deleteSyncTool(agent),
-    run_in_sync: runInSyncTool(agent)
+    run_in_sync: runInSyncTool(agent),
+    update_sync: updateSyncTool(agent)
   };
 }
