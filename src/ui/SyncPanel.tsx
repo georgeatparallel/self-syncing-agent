@@ -5,7 +5,7 @@ import { SyncCard } from "./SyncCard";
 
 interface SyncPanelProps {
   userId: string;
-  syncChangeTick: number | undefined;
+  syncChangeTick: number;
 }
 
 export function SyncPanel({ userId, syncChangeTick }: SyncPanelProps) {
@@ -49,7 +49,14 @@ export function SyncPanel({ userId, syncChangeTick }: SyncPanelProps) {
           </div>
         )}
         {syncs &&
-          syncs.map((s) => <SyncCard key={s.id} userId={userId} sync={s} />)}
+          syncs.map((s) => (
+            <SyncCard
+              key={s.id}
+              userId={userId}
+              sync={s}
+              syncChangeTick={syncChangeTick}
+            />
+          ))}
       </div>
     </aside>
   );

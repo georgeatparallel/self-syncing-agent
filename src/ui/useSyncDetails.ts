@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export interface SyncDetails {
   sync: {
@@ -21,13 +21,17 @@ export interface SyncDetails {
 }
 
 /**
- * Lazy-fetches `/api/user/:userId/syncs/:syncId/details`. Called by
- * SyncCard when a user expands a card; NOT driven by the change-tick
- * (too expensive — the details endpoint hits the facet for per-table
- * row counts). The card's expanded view manually refetches via the
- * returned `refetch` after actions that would invalidate it.
+ * Fetches `/api/user/:userId/syncs/:syncId/details`. Fires only when
+ * `syncId` is non-null (the card is expanded) — null short-circuits the
+ * request so collapsed cards don't pay the facet-attach cost. While a
+ * card stays expanded, any change to `syncChangeTick` auto-refetches so
+ * per-table row counts stay live as webhooks land.
  */
-export function useSyncDetails(userId: string, syncId: string | null) {
+export function useSyncDetails(
+  userId: string,
+  syncId: string | null,
+  syncChangeTick: number
+) {
   const [details, setDetails] = useState<SyncDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +59,14 @@ export function useSyncDetails(userId: string, syncId: string | null) {
       setLoading(false);
     }
   }, [userId, syncId]);
+
+  // Auto-refetch while expanded. Fires once when syncId flips from null
+  // to a value (expand), and again on every tick change while syncId
+  // stays non-null (live updates). Collapse zeroes syncId, short-
+  // circuiting the next run.
+  useEffect(() => {
+    if (syncId) void refetch();
+  }, [refetch, syncChangeTick]);
 
   return { details, loading, error, refetch };
 }

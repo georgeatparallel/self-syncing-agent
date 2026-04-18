@@ -15,10 +15,7 @@ export interface SyncSummary {
  * tick is dataless — receiving it means "refetch"; what specifically
  * changed isn't encoded in the signal.
  */
-export function useSyncsSummary(
-  userId: string,
-  syncChangeTick: number | undefined
-) {
+export function useSyncsSummary(userId: string, syncChangeTick: number) {
   const [syncs, setSyncs] = useState<SyncSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 

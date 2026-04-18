@@ -11,7 +11,12 @@ import { applySchemaMigrations } from "./db/schema";
 import { buildContextMessages } from "./agent/context";
 import { buildTools } from "./agent/tools";
 import { SYSTEM_PROMPT } from "./agent/system-prompt";
-import { getSyncById, listSyncs, getSyncErrorCountSince } from "./db/syncs";
+import {
+  getSyncById,
+  listSyncs,
+  getSyncErrorCountSince,
+  touchSyncUpdatedAt
+} from "./db/syncs";
 import { logSyncError, getRecentSyncErrors } from "./db/sync-errors";
 import { attachFacet } from "./facet/loader";
 import { verifyLinearSignature } from "./webhook/hmac";
@@ -158,6 +163,11 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
       // point of view — the handler intentionally returning 4xx is its
       // way of saying "I saw this and dropped it". Either way, we tell
       // Linear 200 so it doesn't retry.
+      //
+      // Touch the supervisor's syncs.updated_at so the ops-panel
+      // summary's relative timestamp reflects real webhook activity,
+      // not just create/update_sync calls. The facet is unaffected.
+      touchSyncUpdatedAt(sql, sync.id);
       return { status: 200, body: "ok" };
     } catch (e) {
       logSyncError(sql, {

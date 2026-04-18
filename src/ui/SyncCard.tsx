@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Badge, Surface, Text, Button } from "@cloudflare/kumo";
 import { CaretDownIcon, CaretUpIcon, WarningIcon } from "@phosphor-icons/react";
 import type { SyncSummary } from "./useSyncsSummary";
@@ -15,23 +15,19 @@ function relativeTime(ms: number): string {
 interface SyncCardProps {
   userId: string;
   sync: SyncSummary;
+  syncChangeTick: number;
 }
 
-export function SyncCard({ userId, sync }: SyncCardProps) {
+export function SyncCard({ userId, sync, syncChangeTick }: SyncCardProps) {
   const [expanded, setExpanded] = useState(false);
+  // Pass syncChangeTick into the details hook so an expanded card auto-
+  // refetches on every server-pushed signal. Collapsed cards short-
+  // circuit via the null syncId and pay no facet-attach cost.
   const { details, loading, error, refetch } = useSyncDetails(
     userId,
-    expanded ? sync.id : null
+    expanded ? sync.id : null,
+    syncChangeTick
   );
-
-  // Fetch details the first time the card is expanded. Subsequent
-  // expands reuse the cached details; the hook exposes `refetch` if
-  // we ever need to bust the cache.
-  useEffect(() => {
-    if (expanded && !details && !loading && !error) {
-      void refetch();
-    }
-  }, [expanded, details, loading, error, refetch]);
 
   const toggle = useCallback(() => setExpanded((v) => !v), []);
 

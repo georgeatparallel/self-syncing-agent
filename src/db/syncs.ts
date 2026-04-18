@@ -98,3 +98,13 @@ export function getSyncErrorCountSince(
   `;
   return rows[0]?.c ?? 0;
 }
+
+/**
+ * Touch the sync's `updated_at` to now. Called after every successful
+ * webhook delivery so the ops-panel summary's relative timestamp reflects
+ * actual activity (not just create_sync/update_sync calls). Cheap single-
+ * row UPDATE on the supervisor SQLite — the facet is not involved.
+ */
+export function touchSyncUpdatedAt(sql: SqlTag, sync_id: string): void {
+  sql`UPDATE syncs SET updated_at = ${Date.now()} WHERE id = ${sync_id}`;
+}
