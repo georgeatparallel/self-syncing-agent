@@ -76,7 +76,7 @@ describe("buildFacetWorkerCode", () => {
     });
   });
 
-  it("wrapper source exposes __query and #ensureSchema", () => {
+  it("wrapper source exposes __query, __sqlExec, and #ensureSchema", () => {
     const bundle = buildFacetWorkerCode({
       schemaDdl: "CREATE TABLE IF NOT EXISTS x (id TEXT);",
       handlerCode:
@@ -86,5 +86,6 @@ describe("buildFacetWorkerCode", () => {
     const main = bundle.modules["main.js"];
     expect(main).toMatch(/#ensureSchema/);
     expect(main).toMatch(/async __query\(/);
+    expect(main).toMatch(/async __sqlExec\(/);
   });
 });

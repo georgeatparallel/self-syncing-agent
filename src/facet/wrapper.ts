@@ -6,8 +6,9 @@
  * The wrapper's supervisor-only responsibilities:
  *   - fetch delegate: run schema-init then call the agent's handleWebhook
  *   - schema init: #ensureSchema() applies SCHEMA_DDL once, lazily, shared
- *     by both fetch and __query (a query_sync may fire before any webhook
- *     has hit, so the query path also needs to trigger init)
+ *     by both fetch and __query/__sqlExec (a query_sync or run_in_sync may
+ *     fire before any webhook has hit, so those paths also need to trigger
+ *     init)
  *   - __supervisorPing(): no-op RPC that forces Worker Loader compilation
  *     at create_sync time without running the agent's handler
  *   - __query(sql): supervisor-only SQL read path. Catches SQLite errors
@@ -15,6 +16,11 @@
  *     wedge the facet. Tool layer enforces SELECT/WITH-only; wrapper is
  *     power-not-policy. Double underscore discourages the agent from
  *     shadowing it in handler.js.
+ *   - __sqlExec(sql, ...bindings): supervisor-only SQL write path used by
+ *     run_in_sync's exec isolate. Accepts any statement (including DDL) —
+ *     approval gating on the tool side is the trust boundary, not this
+ *     method. Returns { ok: true, rowsWritten, rowsRead } | { ok: false,
+ *     error }; drains the cursor so side effects commit.
  *
  * The agent's handler.js contract: export a function
  *   `handleWebhook(request: Request, sql: SqlStorage): Promise<Response>`
@@ -61,6 +67,28 @@ export class App extends DurableObject {
     try {
       const rows = this.ctx.storage.sql.exec(sql).toArray();
       return { ok: true, rows };
+    } catch (e) {
+      return {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e)
+      };
+    }
+  }
+
+  // Supervisor-only write path used by run_in_sync's exec isolate. Runs
+  // whatever statement + bindings the caller passes; trust comes from the
+  // tool's approval gate, not this method. Drains the cursor so INSERTs
+  // actually commit.
+  async __sqlExec(sql, ...bindings) {
+    this.#ensureSchema();
+    try {
+      const cursor = this.ctx.storage.sql.exec(sql, ...bindings);
+      cursor.toArray();
+      return {
+        ok: true,
+        rowsWritten: cursor.rowsWritten,
+        rowsRead: cursor.rowsRead
+      };
     } catch (e) {
       return {
         ok: false,
