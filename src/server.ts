@@ -56,6 +56,16 @@ export class ChatAgent extends AIChatAgent<Env> {
     });
   }
 
+  /**
+   * Ensure schema is applied before any supervisor-SQLite read. Required
+   * for any method reached via direct DO RPC (which bypasses the Agents
+   * SDK routing that normally runs setName → onStart). Idempotent —
+   * applySchemaMigrations is CREATE TABLE IF NOT EXISTS.
+   */
+  #ensureSchema() {
+    applySchemaMigrations(this.sql.bind(this));
+  }
+
   // userId is taken from the URL path by the webhook route, not from
   // this.name — the webhook path reaches the DO via direct RPC and
   // bypasses the Agents SDK routing that normally calls setName().
@@ -68,6 +78,7 @@ export class ChatAgent extends AIChatAgent<Env> {
     bodyBytes: ArrayBuffer,
     signatureHex: string | null
   ): Promise<{ status: number; body: string }> {
+    this.#ensureSchema();
     const sql = this.sql.bind(this);
     const sync = getSyncById(sql, syncId);
     if (!sync) return { status: 404, body: "sync not found" };
@@ -136,12 +147,12 @@ export class ChatAgent extends AIChatAgent<Env> {
       updated_at: number;
     }>
   > {
-    const sql = this.sql.bind(this);
     // Defensive: direct RPC calls bypass the Agents SDK's routing path
     // that normally calls setName() → onStart(). For a fresh DO that's
-    // never been touched, the syncs table wouldn't exist yet. Calling
-    // the migration here is idempotent (CREATE TABLE IF NOT EXISTS).
-    applySchemaMigrations(sql);
+    // never been touched, the syncs table wouldn't exist yet.
+    // #ensureSchema is idempotent (CREATE TABLE IF NOT EXISTS).
+    this.#ensureSchema();
+    const sql = this.sql.bind(this);
     const syncs = listSyncs(sql);
     const oneHourAgo = Date.now() - 60 * 60 * 1000;
     return syncs.map((s) => ({
@@ -159,8 +170,17 @@ export class ChatAgent extends AIChatAgent<Env> {
    * via `__query` once per table to get row counts — more expensive than
    * the summary, so this is fetched lazily when a user expands a card,
    * not on every change-tick.
+   *
+   * userId is accepted as a parameter (not read from this.name) because
+   * this method is reached via direct RPC from the Hono route and bypasses
+   * the Agents SDK routing that would normally call setName(). Same
+   * pattern as handleWebhookDelivery — see its jsdoc for the full
+   * rationale.
    */
-  async getSyncDetails(syncId: string): Promise<{
+  async getSyncDetails(
+    userId: string,
+    syncId: string
+  ): Promise<{
     sync: {
       id: string;
       name: string;
@@ -179,10 +199,10 @@ export class ChatAgent extends AIChatAgent<Env> {
       handler_version: number;
     }>;
   } | null> {
-    const sql = this.sql.bind(this);
     // Same rationale as listSyncsSummary: defensive idempotent migration
     // for first-touch-via-RPC cases.
-    applySchemaMigrations(sql);
+    this.#ensureSchema();
+    const sql = this.sql.bind(this);
     const sync = getSyncById(sql, syncId);
     if (!sync) return null;
 
@@ -192,7 +212,7 @@ export class ChatAgent extends AIChatAgent<Env> {
     // IF NOT EXISTS shape the agent writes; skips CREATE INDEX / other.
     const tableNames = extractTableNames(sync.schema_ddl);
 
-    const facet = attachFacet(this.env, this.ctx.facets, sync, this.name);
+    const facet = attachFacet(this.env, this.ctx.facets, sync, userId);
     const row_counts: Record<string, number> = {};
     for (const table of tableNames) {
       const result = await (
@@ -321,7 +341,7 @@ app.get("/api/user/:userId/syncs-summary", async (c) => {
 app.get("/api/user/:userId/syncs/:syncId/details", async (c) => {
   const { userId, syncId } = c.req.param();
   const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
-  const details = await stub.getSyncDetails(syncId);
+  const details = await stub.getSyncDetails(userId, syncId);
   if (!details) return c.json({ error: "not_found" }, 404);
   return c.json(details);
 });
