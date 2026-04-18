@@ -20,6 +20,9 @@ importers:
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@pipedream/sdk':
+        specifier: ^2.4.6
+        version: 2.4.6
       '@streamdown/code':
         specifier: ^1.1.1
         version: 1.1.1(react@19.2.5)
@@ -1186,6 +1189,10 @@ packages:
     peerDependencies:
       react: '>= 16.8'
       react-dom: '>= 16.8'
+
+  '@pipedream/sdk@2.4.6':
+    resolution: {integrity: sha512-WNG0hYnHRzcMsM+G2gWmtf+82Ei+p6U8N/ahjOG2RBi2Hrhl8bAnYe6cMzPlzQofLGVakX62dNkCAXY++GVLLA==}
+    engines: {node: '>=18.0.0'}
 
   '@poppinss/colors@4.1.6':
     resolution: {integrity: sha512-H9xkIdFswbS8n1d6vmRd8+c10t2Qe+rZITbbDHHkQixH5+2x1FDGmi/0K+WgWiqQFKPSlIYB7jlH6Kpfn6Fleg==}
@@ -4409,6 +4416,8 @@ snapshots:
     dependencies:
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
+
+  '@pipedream/sdk@2.4.6': {}
 
   '@poppinss/colors@4.1.6':
     dependencies:
