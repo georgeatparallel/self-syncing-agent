@@ -16,7 +16,7 @@ export { HttpGateway } from "./proxy/http-gateway";
 
 const MODEL_ID = "claude-opus-4-7";
 
-export class ChatAgent extends AIChatAgent<Env> {
+export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
   maxPersistedMessages = 100;
 
   /**
@@ -35,6 +35,26 @@ export class ChatAgent extends AIChatAgent<Env> {
    * the widening to `unknown` Props is harmless.
    */
   declare ctx: DurableObjectState<{}>;
+
+  /**
+   * The DO state shape is declared via the `AIChatAgent<Env, State>` generic
+   * above — `{ syncChangeTick: number }`. The Agents SDK syncs this state
+   * to every connected client via WebSocket. `syncChangeTick` is a dataless
+   * signal — a monotonically-increasing integer bumped whenever something
+   * in the user's syncs may have changed (a tool call finished, a webhook
+   * landed, etc.). The client hook watches this field and refetches the
+   * summary when it changes. No payload needed; the tick's only job is
+   * "something changed, go look again."
+   */
+
+  /**
+   * Bump the signal tick. Safe to call multiple times in one turn —
+   * the client collapses consecutive updates via React's dep array.
+   */
+  #bumpChangeTick() {
+    const prev = this.state?.syncChangeTick ?? 0;
+    this.setState({ ...(this.state ?? {}), syncChangeTick: prev + 1 });
+  }
 
   onStart() {
     applySchemaMigrations(this.sql.bind(this));
@@ -128,6 +148,11 @@ export class ChatAgent extends AIChatAgent<Env> {
         handler_version: sync.version
       });
       return { status: 500, body: "handler failed" };
+    } finally {
+      // Signal to the client that something changed. Fires on 2xx (row
+      // written), 5xx (error logged), and throw (error logged) — any
+      // of which could affect what the sidebar should display.
+      this.#bumpChangeTick();
     }
   }
 
@@ -291,7 +316,14 @@ export class ChatAgent extends AIChatAgent<Env> {
         ...buildTools(this)
       },
       stopWhen: stepCountIs(5),
-      abortSignal: options?.abortSignal
+      abortSignal: options?.abortSignal,
+      onFinish: () => {
+        // Signal panel clients to refetch after every completed turn —
+        // any tool call that wrote to the supervisor or facet is captured
+        // by this tick. The AI SDK's onFinish fires after the full stream
+        // (including tool-call results) has been consumed.
+        this.#bumpChangeTick();
+      }
     });
 
     return result.toUIMessageStreamResponse();
