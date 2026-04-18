@@ -2,6 +2,7 @@ import { Surface, Text } from "@cloudflare/kumo";
 import { PlugsConnectedIcon } from "@phosphor-icons/react";
 import { useSyncsSummary } from "./useSyncsSummary";
 import { SyncCard } from "./SyncCard";
+import { ConnectionsPanel } from "./ConnectionsPanel";
 
 interface SyncPanelProps {
   userId: string;
@@ -58,6 +59,8 @@ export function SyncPanel({ userId, syncChangeTick }: SyncPanelProps) {
             />
           ))}
       </div>
+
+      <ConnectionsPanel userId={userId} syncChangeTick={syncChangeTick} />
     </aside>
   );
 }
