@@ -14,13 +14,42 @@ export function createSyncTool(agent: ChatAgent) {
   return tool({
     description: `Create a new sync. Registers a webhook with the upstream service, loads the agent-authored handler into an isolated facet runtime with its own SQLite, applies the schema DDL, and persists the sync registry row. Approval-gated — the user sees the drafted schema_ddl and handler_code in the approval dialog before anything runs. Call this AFTER you've shown the draft in chat.
 
-handler_code contract: JavaScript module source that MUST export \`async function handleWebhook(request, sql)\`.
+handler_code contract: JavaScript module source that MUST export \`async function handleWebhook(request, sql, ctx)\`.
 - \`request\` is the raw webhook POST; signature is already verified by the supervisor, so your code never touches auth.
 - \`sql\` is the facet's own SQLite. \`sql.exec(query, ...bindings)\` for inserts/updates; \`sql.exec(query, ...bindings).toArray()\` for reads.
+- \`ctx\` carries two capabilities:
+  - \`ctx.waitUntil(promise)\` — keep background work alive past the 200 response. Use this so the webhook returns a fast 200 while enrichment runs afterwards.
+  - \`ctx.agent({ model?, system, messages, maxSteps? })\` — spawn a sub-agent ReAct loop and get back a string. \`model\` is \`"haiku" | "sonnet" | "opus"\` (default \`"sonnet"\`; pick \`haiku\` for simple classification, \`opus\` for hard reasoning). The sub-agent has three built-in tools: \`sql\` (reads + writes the facet's SQLite), \`fetch\` (upstream HTTP through the same credential-injecting proxy as the handler's own fetch), and \`exec\` (runs an agent-authored JS module in a fresh isolate — contract matches the run_in_sync tool: export \`async function runInSync(facet, fetch)\`). No nested \`ctx.agent()\` calls permitted. Use when the handler needs LLM reasoning on the payload — triage, classification, summarization, enrichment — rather than deterministic processing.
 - Return a 2xx Response for successful processing (including "filtered out, nothing to write" — use 200). Return 5xx only if you want the upstream to retry.
 - Be idempotent. Upstreams may deliver the same event twice — use INSERT OR REPLACE or ON CONFLICT keyed on the resource's stable id from the payload.
-- Do not import anything beyond the two parameters. \`fetch\` is globally available for upstream API calls (the proxy injects auth automatically); most write-path handlers don't need it.
-- Keep it fast. Upstream webhook timeouts are typically 5-30 seconds.
+- Do not import anything beyond the parameters. \`fetch\` is globally available for upstream API calls (the proxy injects auth automatically); most write-path handlers don't need it.
+- Keep it fast. Upstream webhook timeouts are typically 5–30 seconds. If you need longer LLM reasoning, run it inside \`ctx.waitUntil(ctx.agent(...))\` so the 200 returns immediately and the sub-agent enriches the row in the background.
+
+Example fire-and-forget triage pattern:
+\`\`\`js
+export async function handleWebhook(request, sql, ctx) {
+  const payload = await request.json();
+  const id = payload.data.id;
+  sql.exec(
+    "INSERT OR REPLACE INTO issues (id, title, priority) VALUES (?, ?, ?)",
+    id,
+    payload.data.title,
+    payload.data.priority
+  );
+  if (payload.data.priority === 1) {
+    ctx.waitUntil(
+      ctx.agent({
+        model: "sonnet",
+        system: "You are a Linear triage bot. Given an issue payload, write one sentence describing the likely root cause or next action.",
+        messages: [{ role: "user", content: JSON.stringify(payload.data) }]
+      }).then((note) =>
+        sql.exec("UPDATE issues SET triage = ? WHERE id = ?", note, id)
+      )
+    );
+  }
+  return new Response("ok", { status: 200 });
+}
+\`\`\`
 
 For unfamiliar integrations or resource types: use the probe loop (described in the system prompt) before drafting the real handler. Don't guess payload field names from training data.`,
     inputSchema: z.object({
@@ -52,7 +81,7 @@ For unfamiliar integrations or resource types: use the probe loop (described in 
       handler_code: z
         .string()
         .describe(
-          "JavaScript module source that exports `async function handleWebhook(request, sql)`. See the tool description for the full contract."
+          "JavaScript module source that exports `async function handleWebhook(request, sql, ctx)`. See the tool description for the full contract including the `ctx.agent` sub-agent primitive."
         ),
       filter_description: z
         .string()
