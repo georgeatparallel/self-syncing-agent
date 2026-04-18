@@ -22,6 +22,7 @@ import { attachFacet } from "./facet/loader";
 import { verifyLinearSignature } from "./webhook/hmac";
 
 export { HttpGateway } from "./proxy/http-gateway";
+export { LLMGateway } from "./agent-runtime/llm-gateway";
 
 const MODEL_ID = "claude-opus-4-7";
 
