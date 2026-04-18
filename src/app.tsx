@@ -259,6 +259,14 @@ function Chat() {
     return resolved;
   });
 
+  // Server-pushed change-tick. The Agents SDK's onStateUpdate callback
+  // is the canonical subscription path — fires on every CF_AGENT_STATE
+  // message from the DO (i.e., every this.setState(...) on the server).
+  // We re-publish as a local useState so React's reactivity drives the
+  // SyncPanel's refetch deterministically instead of relying on whether
+  // the SDK mutates agent.state in a re-render-triggering way.
+  const [syncChangeTick, setSyncChangeTick] = useState(0);
+
   const agent = useAgent<ChatAgent>({
     agent: "ChatAgent",
     name: userId,
@@ -266,6 +274,17 @@ function Chat() {
     onClose: useCallback(() => setConnected(false), []),
     onError: useCallback(
       (error: Event) => console.error("WebSocket error:", error),
+      []
+    ),
+    onStateUpdate: useCallback(
+      (_state: unknown, source: "server" | "client") => {
+        // Only react to server-initiated state pushes; client-originated
+        // setState calls come back as "client" and would cause a fetch
+        // storm if we listened to both.
+        if (source === "server") {
+          setSyncChangeTick((t) => t + 1);
+        }
+      },
       []
     ),
     onMcpUpdate: useCallback((state: MCPServersState) => {
@@ -448,13 +467,7 @@ function Chat() {
 
   return (
     <div className="flex h-screen bg-kumo-elevated">
-      <SyncPanel
-        userId={userId}
-        syncChangeTick={
-          (agent.state as { syncChangeTick?: number } | undefined)
-            ?.syncChangeTick
-        }
-      />
+      <SyncPanel userId={userId} syncChangeTick={syncChangeTick} />
       <div
         className="flex-1 flex flex-col relative"
         onDragOver={handleDragOver}
