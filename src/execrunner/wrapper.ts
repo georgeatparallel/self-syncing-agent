@@ -59,7 +59,7 @@ function installLogCapture() {
   return { logs, restore };
 }
 
-export default class extends WorkerEntrypoint {
+export class ExecRunner extends WorkerEntrypoint {
   async run(facet) {
     if (typeof runInSync !== "function") {
       return {

@@ -38,7 +38,7 @@ interface ExecRunner {
 }
 
 interface ExecWorkerStub {
-  getEntrypoint(): ExecRunner;
+  getEntrypoint(name: string): ExecRunner;
 }
 
 // 64KB of serialized JSON. Sized for realistic backfill summaries; past
@@ -74,7 +74,7 @@ export function runInSyncTool(agent: ChatAgent) {
           load: (c: unknown) => ExecWorkerStub;
         }
       ).load(buildExecWorkerCode({ code, userId: agent.name }));
-      const entrypoint = workerStub.getEntrypoint();
+      const entrypoint = workerStub.getEntrypoint("ExecRunner");
 
       // The facet stub is passed AS AN RPC ARGUMENT to entrypoint.run(...).
       // Capability-based RPC allows stubs to cross isolate boundaries;
