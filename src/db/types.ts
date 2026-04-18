@@ -96,3 +96,12 @@ export interface SyncErrorStat {
   last_error_message: string;
   last_occurred_at: number;
 }
+
+export interface ConnectedAccount {
+  user_id: string;
+  app_slug: string; // e.g., "github", "slack", "notion"
+  account_id: string; // Pipedream's account id, e.g., "apn_XxxXxxx"
+  connected_at: number; // Unix ms
+}
+
+export type NewConnectedAccount = ConnectedAccount;
