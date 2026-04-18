@@ -17,7 +17,19 @@ export function buildContextMessages(sql: SqlTag): ModelMessage[] {
   const errorStats = getSyncErrorStats(sql, Date.now() - ERROR_WINDOW_MS);
   return [
     { role: "user", content: formatActiveSyncs(syncs) },
-    { role: "user", content: formatSyncErrors(errorStats) }
+    {
+      role: "user",
+      content: formatSyncErrors(errorStats),
+      // Breakpoint b3: ambient context is stable across a chat session
+      // in practice — sync creation and new errors arrive between
+      // sessions, not mid-turn. Marking the trailing context block
+      // caches `tools + system + context` as a single hit on most
+      // follow-up turns. When it does invalidate, we pay one 25% write
+      // and recover on the next request.
+      providerOptions: {
+        anthropic: { cacheControl: { type: "ephemeral" } }
+      }
+    }
   ];
 }
 

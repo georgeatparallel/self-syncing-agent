@@ -343,6 +343,19 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
       ...(await convertToModelMessages(this.messages))
     ];
 
+    // Breakpoint b4: cache up through the new user message. Writes a
+    // fresh entry each turn; next turn's request walks back within the
+    // 20-block lookback window and hits the prior write at what is now
+    // a frozen history position. Mutation is local to this messages
+    // array — `this.messages` is untouched.
+    if (messages.length > 0) {
+      const last = messages[messages.length - 1];
+      last.providerOptions = {
+        ...last.providerOptions,
+        anthropic: { cacheControl: { type: "ephemeral" } }
+      };
+    }
+
     const mcpTools = this.mcp.getAITools();
 
     const result = streamText({

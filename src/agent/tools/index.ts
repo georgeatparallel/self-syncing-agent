@@ -30,6 +30,15 @@ export function buildTools(agent: ChatAgent) {
     create_sync: createSyncTool(agent),
     delete_sync: deleteSyncTool(agent),
     run_in_sync: runInSyncTool(agent),
-    update_sync: updateSyncTool(agent)
+    // Breakpoint b1: caches all tool definitions as a single prefix.
+    // When adding a new tool, append it after this entry and move the
+    // providerOptions spread onto the new tail tool — cache_control
+    // belongs on whatever is LAST in the object's insertion order.
+    update_sync: {
+      ...updateSyncTool(agent),
+      providerOptions: {
+        anthropic: { cacheControl: { type: "ephemeral" } }
+      }
+    }
   };
 }
