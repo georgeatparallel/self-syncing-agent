@@ -23,7 +23,10 @@ export function ConnectionsPanel({
   userId,
   syncChangeTick
 }: ConnectionsPanelProps) {
-  const { connections, error, refetch } = useConnections(userId, syncChangeTick);
+  const { connections, error, refetch } = useConnections(
+    userId,
+    syncChangeTick
+  );
   const [pending, setPending] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [selectedApp, setSelectedApp] = useState<string>(APP_OPTIONS[0].value);
