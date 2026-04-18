@@ -46,4 +46,14 @@ export function applySchemaMigrations(sql: SqlTag): void {
     CREATE INDEX IF NOT EXISTS idx_sync_errors_sync_id_occurred_at
       ON sync_errors(sync_id, occurred_at DESC)
   `;
+
+  sql`
+    CREATE TABLE IF NOT EXISTS connected_accounts (
+      user_id TEXT NOT NULL,
+      app_slug TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      connected_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, app_slug)
+    )
+  `;
 }
