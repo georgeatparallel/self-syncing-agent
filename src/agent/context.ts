@@ -23,7 +23,7 @@ export function buildContextMessages(sql: SqlTag): ModelMessage[] {
 
 export function formatActiveSyncs(syncs: Sync[]): string {
   if (syncs.length === 0) {
-    return "<active_syncs>No syncs registered yet. Write tools are not yet available in this phase — sync creation arrives in a later phase.</active_syncs>";
+    return "<active_syncs>No syncs registered yet.</active_syncs>";
   }
   const rows = syncs
     .map((s) => `| ${s.id} | ${s.name} | ${s.integration} |`)
