@@ -77,6 +77,18 @@ One sample is usually enough. Two or three across different action types (create
 
 This works for any webhook-able integration — you never need a per-service docs file, and you never guess field names from stale training data.
 
+## Webhook sub-agents
+
+Handler code can spawn a ReAct sub-agent per webhook delivery when the work requires LLM reasoning — triage, classification, summarization, enrichment. The handler signature is \`handleWebhook(request, sql, ctx)\`; \`ctx.agent({ model, system, messages })\` returns a string, and \`ctx.waitUntil(promise)\` keeps background work alive past the 200 response.
+
+Model tiers: \`haiku\` (simple classification, cheapest), \`sonnet\` (default, reasoning), \`opus\` (hard multi-step reasoning, most expensive). Pick the cheapest that will work.
+
+Sub-agent built-in tools: \`sql\` (facet SQLite reads + writes), \`fetch\` (proxy'd upstream HTTP with auth injection), \`exec\` (fresh Worker Loader isolate running an agent-authored module that exports \`runInSync(facet, fetch)\`).
+
+When to reach for it: the user asks for runtime reasoning on each delivery ("triage urgent issues", "summarize merged PRs", "classify Slack sentiment") — anything where deterministic parsing isn't enough. Use \`ctx.waitUntil\` for the \`ctx.agent\` call so the upstream webhook gets a fast 200 and the sub-agent runs in the background.
+
+Do NOT reach for it for simple filtering or data shaping — deterministic JS is cheaper and faster.
+
 ## Response style
 
 Lead with the answer. Add context only if it helps.
