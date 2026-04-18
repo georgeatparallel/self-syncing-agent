@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship the foundation for Pipedream Connect: the per-user OAuth/account-connection flow, supervisor storage for those connections, and a short-lived-token mint endpoint for the frontend popup. After this phase, a user can click "Connect an app" in our UI, grant access via Pipedream's popup, and the resulting `account_id` lands in our supervisor SQLite keyed on `(user_id, app_slug)`. Nothing actually *uses* those credentials yet — that's Phase B (gateway routing).
+**Goal:** Ship the foundation for Pipedream Connect: the per-user OAuth/account-connection flow, supervisor storage for those connections, and a short-lived-token mint endpoint for the frontend popup. After this phase, a user can click "Connect an app" in our UI, grant access via Pipedream's popup, and the resulting `account_id` lands in our supervisor SQLite keyed on `(user_id, app_slug)`. Nothing actually _uses_ those credentials yet — that's Phase B (gateway routing).
 
 **Architecture:**
 
@@ -62,9 +62,9 @@ In `src/db/types.ts`, append:
 ```ts
 export interface ConnectedAccount {
   user_id: string;
-  app_slug: string;        // e.g., "github", "slack", "notion"
-  account_id: string;      // Pipedream's account id, e.g., "apn_XxxXxxx"
-  connected_at: number;    // Unix ms
+  app_slug: string; // e.g., "github", "slack", "notion"
+  account_id: string; // Pipedream's account id, e.g., "apn_XxxXxxx"
+  connected_at: number; // Unix ms
 }
 
 export type NewConnectedAccount = ConnectedAccount;
@@ -135,7 +135,9 @@ function sample(partial: Partial<ConnectedAccount> = {}): ConnectedAccount {
   };
 }
 
-async function withFreshDO<T>(fn: (sql: (s: TemplateStringsArray, ...v: unknown[]) => unknown) => T): Promise<T> {
+async function withFreshDO<T>(
+  fn: (sql: (s: TemplateStringsArray, ...v: unknown[]) => unknown) => T
+): Promise<T> {
   const id = env.ChatAgent.idFromName(crypto.randomUUID());
   const stub = env.ChatAgent.get(id);
   return runInDurableObject(stub, async (instance) => {
@@ -156,17 +158,31 @@ describe("connected_accounts CRUD", () => {
 
   it("upsert replaces on (user_id, app_slug) collision", async () => {
     await withFreshDO((sql) => {
-      upsertConnectedAccount(sql, sample({ account_id: "apn_old", connected_at: 1 }));
-      upsertConnectedAccount(sql, sample({ account_id: "apn_new", connected_at: 2 }));
+      upsertConnectedAccount(
+        sql,
+        sample({ account_id: "apn_old", connected_at: 1 })
+      );
+      upsertConnectedAccount(
+        sql,
+        sample({ account_id: "apn_new", connected_at: 2 })
+      );
       const rows = listConnectedAccounts(sql, "u-1");
-      expect(rows).toEqual([sample({ account_id: "apn_new", connected_at: 2 })]);
+      expect(rows).toEqual([
+        sample({ account_id: "apn_new", connected_at: 2 })
+      ]);
     });
   });
 
   it("listConnectedAccounts scopes by user_id", async () => {
     await withFreshDO((sql) => {
-      upsertConnectedAccount(sql, sample({ user_id: "u-1", app_slug: "github" }));
-      upsertConnectedAccount(sql, sample({ user_id: "u-2", app_slug: "github" }));
+      upsertConnectedAccount(
+        sql,
+        sample({ user_id: "u-1", app_slug: "github" })
+      );
+      upsertConnectedAccount(
+        sql,
+        sample({ user_id: "u-2", app_slug: "github" })
+      );
       expect(listConnectedAccounts(sql, "u-1")).toHaveLength(1);
       expect(listConnectedAccounts(sql, "u-1")[0].user_id).toBe("u-1");
     });
@@ -297,7 +313,10 @@ describe("getAccessToken", () => {
       )
     );
     const res = await getAccessToken(makeEnv());
-    expect(res).toEqual({ accessToken: "pd_access_xyz", expiresInSeconds: 3600 });
+    expect(res).toEqual({
+      accessToken: "pd_access_xyz",
+      expiresInSeconds: 3600
+    });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe("https://api.pipedream.com/v1/oauth/token");
@@ -328,15 +347,21 @@ describe("createConnectToken", () => {
         JSON.stringify({
           token: "ctok_abc",
           expires_at: "2099-01-01T00:00:00Z",
-          connect_link_url: "https://pipedream.com/_static/connect.html?token=ctok_abc"
+          connect_link_url:
+            "https://pipedream.com/_static/connect.html?token=ctok_abc"
         }),
         { status: 200 }
       )
     );
-    const res = await createConnectToken(makeEnv(), "pd_access_xyz", "external-user-1");
+    const res = await createConnectToken(
+      makeEnv(),
+      "pd_access_xyz",
+      "external-user-1"
+    );
     expect(res).toEqual({
       token: "ctok_abc",
-      connectLinkUrl: "https://pipedream.com/_static/connect.html?token=ctok_abc"
+      connectLinkUrl:
+        "https://pipedream.com/_static/connect.html?token=ctok_abc"
     });
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe("https://api.pipedream.com/v1/connect/proj_xyz/tokens");
@@ -569,7 +594,8 @@ export async function getCachedAccessToken(env: Env): Promise<string> {
   const fresh = await getAccessToken(env);
   cache.set(key, {
     token: fresh.accessToken,
-    usableUntilMs: Date.now() + fresh.expiresInSeconds * 1000 - REFRESH_MARGIN_MS
+    usableUntilMs:
+      Date.now() + fresh.expiresInSeconds * 1000 - REFRESH_MARGIN_MS
   });
   return fresh.accessToken;
 }
@@ -973,17 +999,14 @@ export function ConnectionsPanel({
           app: selectedApp,
           onSuccess: async (account: { id: string }) => {
             try {
-              const res = await fetch(
-                `/api/user/${userId}/pipedream/account`,
-                {
-                  method: "POST",
-                  headers: { "content-type": "application/json" },
-                  body: JSON.stringify({
-                    app_slug: selectedApp,
-                    account_id: account.id
-                  })
-                }
-              );
+              const res = await fetch(`/api/user/${userId}/pipedream/account`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  app_slug: selectedApp,
+                  account_id: account.id
+                })
+              });
               if (!res.ok) throw new Error(`persist failed: ${res.status}`);
               onConnectionAdded();
               resolve();
@@ -1008,9 +1031,7 @@ export function ConnectionsPanel({
       <div className="mb-2 text-xs uppercase tracking-wide text-kumo-muted">
         Connections
       </div>
-      {error && (
-        <div className="text-xs text-red-500 mb-2">Error: {error}</div>
-      )}
+      {error && <div className="text-xs text-red-500 mb-2">Error: {error}</div>}
       <ul className="space-y-1 mb-3">
         {(connections ?? []).length === 0 ? (
           <li className="text-xs text-kumo-muted">No connections yet.</li>
@@ -1140,7 +1161,9 @@ Expected: Vite + Cloudflare dev environment up.
 ```bash
 curl -s "http://localhost:5173/api/user/<USERID>/pipedream/accounts" | jq .
 ```
+
 Expected:
+
 ```json
 { "accounts": [{ "user_id": "...", "app_slug": "github", "account_id": "apn_...", "connected_at": ... }] }
 ```
