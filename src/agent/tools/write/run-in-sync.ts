@@ -49,15 +49,39 @@ const RESULT_CAP = 64 * 1024;
 
 export function runInSyncTool(agent: ChatAgent) {
   return tool({
-    description:
-      "Run agent-authored one-shot code inside a sync's isolated runtime. Use for backfills (pull history from the upstream API), diagnostics (ad-hoc queries the read path can't express), and data repair. The code must export `async function runInSync(facet, fetch)`. Calls to facet.__query / facet.__sqlExec read/write the sync's SQLite. fetch goes through the same auth proxy handler.js uses — the upstream token is injected automatically. console.log / .info / .warn / .error are captured and returned alongside the result (and on errors). Approval-gated.",
+    description: `Run agent-authored one-shot code inside a sync's isolated runtime. Approval-gated. Use for:
+- Backfill (pull historical data from the upstream API into the facet).
+- Diagnostics (ad-hoc queries the read path can't express — parameter binding, multi-statement flows).
+- Data repair (fix up rows after a broken handler version).
+- Triggering upstream actions during the probe loop (create a test event so a webhook fires).
+
+Code contract: ES module source that MUST export \`async function runInSync(facet, fetch)\`. Whatever runInSync returns becomes the tool's \`result\`.
+
+facet RPC methods:
+- \`await facet.__query(sql)\` → \`{ ok: true, rows } | { ok: false, error }\`. Read-only SQL.
+- \`await facet.__sqlExec(sql, ...bindings)\` → \`{ ok: true, rowsWritten, rowsRead } | { ok: false, error }\`. Arbitrary SQL (INSERT/UPDATE/DELETE/DDL).
+
+\`fetch\` is global and routes through the same auth proxy handler.js uses — the upstream token is injected automatically.
+
+Logging: \`console.log\` / \`.info\` / \`.warn\` / \`.error\` are captured (last 200 entries, 2KB per message) and returned alongside the result on BOTH success and failure. Log before and after each \`fetch\` and \`__sqlExec\` boundary so a failing run is debuggable from the return value alone. Do NOT reassign \`console\` methods — you'll lose debug visibility.
+
+Limits and caveats:
+- Keep runs under ~30 seconds (Workers wall-time per RPC). For long backfills, store progress (e.g., \`last_synced_at\`) in a side table and call run_in_sync repeatedly.
+- Do not \`import\` anything beyond runtime globals (\`fetch\`, \`crypto\`, \`Response\`). No npm packages.
+- Writes must be idempotent (INSERT OR REPLACE, ON CONFLICT) — retries are always possible.
+- Result is capped at 64KB serialized JSON. Past that you'll see \`{ ok: true, result: null, truncated: true, serialized_bytes }\`; retry with aggregates or paging.
+
+Error shapes:
+- \`{ error: "not_found", sync_id }\` — unknown sync. Recheck <active_syncs>; maybe it was deleted.
+- \`{ ok: false, error: "exec_failed", detail, stack?, logs }\` — code threw. Read the logs to diagnose.
+- \`{ ok: false, error: "no_export", detail, logs }\` — module didn't export runInSync.`,
     inputSchema: z.object({
       sync_id: z.string().describe("The sync's UUID."),
       code: z
         .string()
         .min(1)
         .describe(
-          "An ES module that exports `async function runInSync(facet, fetch)`. Whatever runInSync returns becomes the tool's result. facet.__query(sql) returns { ok, rows | error }. facet.__sqlExec(sql, ...bindings) returns { ok, rowsWritten, rowsRead | error }. Use console.log/warn/error liberally — logs are captured and returned (even on failure). Keep runs under 30s; chunk long backfills."
+          "An ES module that exports `async function runInSync(facet, fetch)`. See the tool description for the full contract, logging rules, limits, and error shapes."
         )
     }),
     needsApproval: true,

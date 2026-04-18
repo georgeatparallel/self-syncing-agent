@@ -23,8 +23,22 @@ type UpdateSyncResult =
 
 export function updateSyncTool(agent: ChatAgent) {
   return tool({
-    description:
-      "Update an existing sync's handler code and/or schema. Approval-gated. All fields except sync_id are optional — send only what's changing. When schema_ddl is provided, send the FULL target schema (all CREATE TABLE / CREATE INDEX statements), not a diff. When the schema is materially changing (new columns, new tables), pair it with migration_ddl (ALTER TABLE statements) that transitions existing data. If a bad handler_code prevents the new bundle from compiling, the update is rolled back and the sync stays on its old version. Use for bug fixes in handler_code, schema evolution, and filter changes.",
+    description: `Update an existing sync's handler and/or schema atomically. Approval-gated. At least one of \`handler_code\` / \`schema_ddl\` / \`migration_ddl\` must be provided; \`sync_id\` is always required. Use for bug fixes in handler logic, schema evolution, filter refinements, and the Phase-3 step of the probe loop (replacing the probe's raw-capture handler with one that extracts the real fields you observed).
+
+Key rules:
+- **\`schema_ddl\` is the FULL target schema, always.** Even for a one-column addition, send the entire schema as CREATE TABLE / CREATE INDEX statements separated by semicolons — not a diff. Use CREATE TABLE IF NOT EXISTS so re-applying is safe.
+- **Pair schema changes to existing tables with \`migration_ddl\`.** Adding a brand-new table: CREATE TABLE IF NOT EXISTS in schema_ddl is enough (no migration needed). Adding a column, renaming a column, changing a type on an existing table: supply migration_ddl with the appropriate ALTER TABLE. Migration runs against the live facet BEFORE the bundle swap.
+- **Destructive migrations (DROP COLUMN, type change) should pair with a handler update in the same call.** The old handler keeps running briefly with the migrated schema between migration and swap — if the old handler writes a column that was just dropped, webhook deliveries in that window fail (upstream retries; no data loss but noisy).
+- **A webhook arriving in the swap window** (tens of ms between abort and new facet up) gets a 500 which the upstream retries — no data loss, brief delay. Mention this to the user for timing-sensitive updates.
+- **Rollback is automatic on compile failure.** If the new handler_code has a syntax error, the DB is restored to the previous version and the old bundle is re-attached. The sync stays live on its old version.
+- **For big backfills after a schema change**, follow up with run_in_sync as a separate tool call. update_sync handles the shape transition; run_in_sync handles filling in new data.
+
+Error shapes:
+- \`{ error: "not_found", sync_id }\` — unknown sync.
+- \`{ ok: false, error: "no_changes" }\` — none of the three optional fields were provided.
+- \`{ ok: false, error: "migration_failed", detail }\` — migration_ddl threw. DB untouched, sync still on old version.
+- \`{ ok: false, error: "facet_load_failed", detail }\` — new bundle failed to compile. Rolled back automatically.
+- \`{ ok: true, new_version: N }\` — success.`,
     inputSchema: z
       .object({
         sync_id: z.string().describe("The sync's UUID."),

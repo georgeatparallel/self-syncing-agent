@@ -12,8 +12,17 @@ import type { NewSync } from "../../../db/types";
 
 export function createSyncTool(agent: ChatAgent) {
   return tool({
-    description:
-      "Create a new sync. Registers a webhook with the upstream, loads the agent-authored handler into an isolated facet with its own SQLite, runs the schema DDL, and persists the sync registry row. Approval-gated — the user sees the drafted schema_ddl and handler_code in the approval dialog before it runs. Use AFTER you've shown the draft schema + handler in chat.",
+    description: `Create a new sync. Registers a webhook with the upstream service, loads the agent-authored handler into an isolated facet runtime with its own SQLite, applies the schema DDL, and persists the sync registry row. Approval-gated — the user sees the drafted schema_ddl and handler_code in the approval dialog before anything runs. Call this AFTER you've shown the draft in chat.
+
+handler_code contract: JavaScript module source that MUST export \`async function handleWebhook(request, sql)\`.
+- \`request\` is the raw webhook POST; signature is already verified by the supervisor, so your code never touches auth.
+- \`sql\` is the facet's own SQLite. \`sql.exec(query, ...bindings)\` for inserts/updates; \`sql.exec(query, ...bindings).toArray()\` for reads.
+- Return a 2xx Response for successful processing (including "filtered out, nothing to write" — use 200). Return 5xx only if you want the upstream to retry.
+- Be idempotent. Upstreams may deliver the same event twice — use INSERT OR REPLACE or ON CONFLICT keyed on the resource's stable id from the payload.
+- Do not import anything beyond the two parameters. \`fetch\` is globally available for upstream API calls (the proxy injects auth automatically); most write-path handlers don't need it.
+- Keep it fast. Upstream webhook timeouts are typically 5-30 seconds.
+
+For unfamiliar integrations or resource types: use the probe loop (described in the system prompt) before drafting the real handler. Don't guess payload field names from training data.`,
     inputSchema: z.object({
       name: z
         .string()
@@ -24,24 +33,26 @@ export function createSyncTool(agent: ChatAgent) {
           "name must be alphanumeric + hyphens/underscores only (it is used as the facet name)"
         )
         .describe(
-          "User-visible sync label. Must be unique per user. Also used as the facet's name."
+          "User-visible sync label. Must be unique per user. Also used as the facet's name. Prefix throwaway probe syncs with 'probe-' so they're obviously disposable."
         ),
-      integration: z.enum(["linear"]).describe("V1 supports 'linear' only."),
+      integration: z
+        .enum(["linear"])
+        .describe("Upstream integration identifier."),
       resource_types: z
         .array(z.string().min(1))
         .min(1)
         .describe(
-          "Upstream resource types to subscribe the webhook to. For Linear: 'Issue', 'Comment', 'Project', 'ProjectUpdate', 'Cycle', 'IssueLabel', 'IssueAttachment', 'Reaction'. Pick the minimal set that covers the user's ask — fewer types means fewer no-op webhook deliveries."
+          "Upstream resource types to subscribe the webhook to. Pick the minimal set that covers the user's ask — extra types just wake the facet for no-op deliveries. Look up valid values per integration via web_search if unsure."
         ),
       schema_ddl: z
         .string()
         .describe(
-          "SQL DDL statements for the facet's SQLite, separated by semicolons. Use CREATE TABLE IF NOT EXISTS so re-applying is idempotent."
+          "One or more CREATE TABLE / CREATE INDEX statements separated by semicolons. Use CREATE TABLE IF NOT EXISTS so re-applying is safe. SQLite types only: TEXT, INTEGER, REAL, BLOB, NULL. Store JSON-shaped fields (arrays, nested metadata) as TEXT and parse at read time."
         ),
       handler_code: z
         .string()
         .describe(
-          "JavaScript module source that exports handleWebhook(request, sql). See system prompt for exact contract."
+          "JavaScript module source that exports `async function handleWebhook(request, sql)`. See the tool description for the full contract."
         ),
       filter_description: z
         .string()
