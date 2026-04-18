@@ -60,12 +60,11 @@ export function useSyncDetails(
     }
   }, [userId, syncId]);
 
-  // Auto-refetch while expanded. Fires once when syncId flips from null
-  // to a value (expand), and again on every tick change while syncId
-  // stays non-null (live updates). Collapse zeroes syncId, short-
-  // circuiting the next run.
+  // Auto-refetch on expand (refetch's identity changes when syncId
+  // flips) and on every tick change. refetch is null-safe so we don't
+  // guard on syncId here — collapsed cards just no-op.
   useEffect(() => {
-    if (syncId) void refetch();
+    void refetch();
   }, [refetch, syncChangeTick]);
 
   return { details, loading, error, refetch };
