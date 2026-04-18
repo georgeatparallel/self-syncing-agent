@@ -71,7 +71,7 @@ describe("runAgent", () => {
     expect(call.model.id).toBe("claude-sonnet-4-6");
   });
 
-  it("caps maxSteps at 15", async () => {
+  it("caps maxSteps at 15 even when a higher number is requested", async () => {
     vi.mocked(generateText).mockResolvedValue({
       text: "ok",
       steps: [],
@@ -83,8 +83,30 @@ describe("runAgent", () => {
       fakeBridge as never,
       fakeEnv
     );
-    const call = vi.mocked(generateText).mock.calls[0][0] as unknown as { stopWhen: unknown };
-    expect(call.stopWhen).toBeDefined();
+    const call = vi.mocked(generateText).mock.calls[0][0] as {
+      stopWhen: (ctx: { steps: unknown[] }) => boolean | Promise<boolean>;
+    };
+    const at14 = await call.stopWhen({ steps: new Array(14) });
+    const at15 = await call.stopWhen({ steps: new Array(15) });
+    expect(at14).toBe(false);
+    expect(at15).toBe(true);
+  });
+
+  it("defaults maxSteps to 8 when not specified", async () => {
+    vi.mocked(generateText).mockResolvedValue({
+      text: "ok",
+      steps: [],
+      usage: { inputTokens: 0, outputTokens: 0 }
+    } as unknown as Awaited<ReturnType<typeof generateText>>);
+
+    await runAgent(baseReq, fakeBridge as never, fakeEnv);
+    const call = vi.mocked(generateText).mock.calls[0][0] as {
+      stopWhen: (ctx: { steps: unknown[] }) => boolean | Promise<boolean>;
+    };
+    const at7 = await call.stopWhen({ steps: new Array(7) });
+    const at8 = await call.stopWhen({ steps: new Array(8) });
+    expect(at7).toBe(false);
+    expect(at8).toBe(true);
   });
 
   it("returns { ok: false } when generateText throws", async () => {
@@ -106,5 +128,30 @@ describe("runAgent", () => {
     fakeBridge.sqlExec.mockResolvedValue({ ok: true, rowsWritten: 0, rowsRead: 1 });
     await runAgent(baseReq, fakeBridge as never, fakeEnv);
     expect(fakeBridge.sqlExec).toHaveBeenCalledWith("SELECT 1");
+  });
+
+  it("wires fetch tool to bridge.gatewayFetch and returns { status, body }", async () => {
+    vi.mocked(generateText).mockImplementation((async (opts: unknown) => {
+      const tools = (opts as { tools: Record<string, { execute: (input: unknown) => Promise<unknown> }> }).tools;
+      const out = await tools.fetch.execute({
+        url: "https://api.linear.app/graphql",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"query":"x"}'
+      });
+      expect(out).toEqual({ status: 201, body: "created" });
+      return {
+        text: "done",
+        steps: [],
+        usage: { inputTokens: 0, outputTokens: 0 }
+      } as unknown as Awaited<ReturnType<typeof generateText>>;
+    }) as unknown as typeof generateText);
+    fakeBridge.gatewayFetch.mockResolvedValue(new Response("created", { status: 201 }));
+    await runAgent(baseReq, fakeBridge as never, fakeEnv);
+    expect(fakeBridge.gatewayFetch).toHaveBeenCalledWith("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"query":"x"}'
+    });
   });
 });

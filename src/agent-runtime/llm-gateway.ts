@@ -1,4 +1,4 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
@@ -8,6 +8,46 @@ import type { FacetAgentBridge } from "./facet-agent-bridge";
 
 const MAX_STEPS_HARD_CAP = 15;
 const DEFAULT_STEPS = 8;
+
+/**
+ * Adapter between FacetAgentBridge (supervisor-side sql/fetch surface)
+ * and the FacetBridge contract that run_in_sync-authored `runInSync`
+ * code expects (`__query` / `__sqlExec`).
+ *
+ * The exec tool loads a Worker Loader isolate and invokes the wrapper's
+ * `run(facet)` — the wrapper passes that `facet` straight into user
+ * code as `runInSync(facet, fetch)`. Agent-authored code calls
+ * `facet.__query(...)` and `facet.__sqlExec(...)` (see
+ * src/execrunner/facet-bridge.ts for the canonical surface), so we
+ * must expose those method names from whatever we pass in.
+ *
+ * An RpcTarget subclass is required — raw objects and DO stubs don't
+ * marshal across Worker Loader isolate boundaries.
+ */
+class ExecFacetShim extends RpcTarget {
+  #bridge: FacetAgentBridge;
+
+  constructor(bridge: FacetAgentBridge) {
+    super();
+    this.#bridge = bridge;
+  }
+
+  async __query(sql: string) {
+    try {
+      const rows = await this.#bridge.sqlQuery(sql);
+      return { ok: true as const, rows };
+    } catch (e) {
+      return {
+        ok: false as const,
+        error: e instanceof Error ? e.message : String(e)
+      };
+    }
+  }
+
+  async __sqlExec(sql: string, ...bindings: unknown[]) {
+    return this.#bridge.sqlExec(sql, ...bindings);
+  }
+}
 
 /**
  * Pure function form for unit tests — no WorkerEntrypoint plumbing.
@@ -66,7 +106,8 @@ export async function runAgent(
         const stub = (env.LOADER as unknown as {
           load: (c: unknown) => { getEntrypoint: () => { run: (f: unknown) => Promise<unknown> } };
         }).load(bundle);
-        return stub.getEntrypoint().run(null);
+        const shim = new ExecFacetShim(bridge);
+        return stub.getEntrypoint().run(shim);
       }
     })
   };
@@ -82,10 +123,10 @@ export async function runAgent(
     return {
       ok: true,
       text: result.text,
-      steps: Array.isArray(result.steps) ? result.steps.length : 0,
+      steps: result.steps.length,
       usage: {
-        input_tokens: (result.usage as unknown as { inputTokens: number }).inputTokens ?? 0,
-        output_tokens: (result.usage as unknown as { outputTokens: number }).outputTokens ?? 0
+        input_tokens: result.usage.inputTokens ?? 0,
+        output_tokens: result.usage.outputTokens ?? 0
       }
     };
   } catch (e) {
