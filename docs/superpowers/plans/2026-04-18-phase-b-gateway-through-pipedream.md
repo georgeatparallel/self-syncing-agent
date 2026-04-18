@@ -6,8 +6,8 @@
 
 **Architecture:**
 
-- Existing Linear path (hardcoded `LINEAR_ACCESS_TOKEN`) stays untouched in Phase B — existing prod syncs keep working without migration risk. Phase C/D can migrate Linear to Pipedream later if we want.
-- A new hostname → Pipedream app-slug map handles the "which app does this URL belong to" lookup. Static, 5-6 entries for V1 (github, slack, notion, google_sheets/drive, etc.).
+- Linear migrates to Pipedream in this phase — the hardcoded `LINEAR_ACCESS_TOKEN` outbound path is removed. One code path for all integrations; matches the "zero per-integration supervisor code" thesis. Cost: user must click "Connect Linear" once in the Connections panel before handler/sub-agent outbound to `api.linear.app` works. Webhook delivery (incoming) is unaffected — that path uses the stored `webhook_secret` for signature verification, orthogonal to outbound auth. `LINEAR_ACCESS_TOKEN` env secret stays until Phase D (still used by `registerLinearWebhook`).
+- A new hostname → Pipedream app-slug map handles the "which app does this URL belong to" lookup. Static, 6 entries for V1 (linear, github, slack, notion, google_sheets, google_drive).
 - `handleGatewayRequest` gets one new parameter — an async `accountLookup: (userId, appSlug) => Promise<string | null>` capability. Real implementation RPCs into the user's `ChatAgent` DO via `env.ChatAgent.get(idFromName(userId)).getConnectedAccountId(...)`. Tests pass a mock.
 - New `src/pipedream/proxy.ts` module exports `proxiedFetch(...)` — given a request + access token + account_id + userId, it constructs the Pipedream proxy URL (`/v1/connect/{project}/proxy/{base64(url)}?external_user_id=X&account_id=Y`), prefixes non-system headers with `x-pd-proxy-`, forwards with the bearer token, and returns the upstream response.
 - New ChatAgent method `getConnectedAccountId(userId, appSlug)` wraps the existing `listConnectedAccounts` DB helper to return just the account_id for a specific app (or null if not connected).
@@ -45,7 +45,7 @@
 - Create: `src/pipedream/host-mapping.ts`
 - Create: `src/pipedream/host-mapping.test.ts`
 
-**Context:** Tiny lookup module. A hostname like `api.github.com` maps to the Pipedream app slug `github`. Several apps share hosts (e.g., `sheets.googleapis.com` and `drive.googleapis.com` both belong to the user's Google account, but in Pipedream they're usually distinct slugs — keep them distinct in our map).
+**Context:** Tiny lookup module. A hostname like `api.github.com` maps to the Pipedream app slug `github`. Several apps share hosts (e.g., `sheets.googleapis.com` and `drive.googleapis.com` both belong to the user's Google account, but in Pipedream they're usually distinct slugs — keep them distinct in our map). **Linear IS included** — Phase B migrates Linear outbound to Pipedream too.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -67,8 +67,10 @@ describe("resolveAppSlug", () => {
   it("is case-insensitive on hostname", () => {
     expect(resolveAppSlug("API.GITHUB.COM")).toBe("github");
   });
+  it("maps api.linear.app to linear", () => {
+    expect(resolveAppSlug("api.linear.app")).toBe("linear");
+  });
   it("returns null for unknown hosts", () => {
-    expect(resolveAppSlug("api.linear.app")).toBeNull(); // linear stays hardcoded this phase
     expect(resolveAppSlug("example.com")).toBeNull();
   });
   it("HOST_TO_APP_SLUG exposes the full map", () => {
@@ -94,11 +96,14 @@ Expected: FAIL (module not found).
  * pick the user's connected account for an outbound request. Keys are
  * lowercase; callers lowercase the hostname before lookup.
  *
- * `api.linear.app` is intentionally NOT here — Linear still goes through
- * the hardcoded gateway path with the workspace token, preserving the
- * existing V1 demo until Phase C/D migrates it.
+ * Linear is included — Phase B migrates outbound Linear API calls
+ * through Pipedream too. LINEAR_ACCESS_TOKEN env secret survives in
+ * the codebase for now (still used by the hardcoded
+ * registerLinearWebhook in src/integrations/linear-api.ts); that
+ * gets removed in Phase D.
  */
 export const HOST_TO_APP_SLUG: Record<string, string> = {
+  "api.linear.app": "linear",
   "api.github.com": "github",
   "slack.com": "slack",
   "api.notion.com": "notion",
@@ -462,7 +467,7 @@ git commit -m "feat(pipedream): getConnectedAccountId ChatAgent RPC method"
 - Modify: `src/proxy/http-gateway.ts`
 - Modify: `src/proxy/http-gateway.test.ts`
 
-**Context:** The central file. Extends the existing signature so unknown-host rejection becomes Pipedream-first, hardcoded-Linear-fallback kept intact.
+**Context:** The central file. Remove the hardcoded `api.linear.app` case; everything with an entry in `HOST_TO_APP_SLUG` (Linear included) goes through the Pipedream path.
 
 ### Current shape (read first)
 
@@ -513,14 +518,7 @@ export async function handleGatewayRequest(
   const url = new URL(request.url);
   const host = url.hostname.toLowerCase();
 
-  // 1. Hardcoded paths (Linear stays here for V1 parity).
-  if (host === "api.linear.app") {
-    const headers = new Headers(request.headers);
-    headers.set("Authorization", linearAuthHeader(env.LINEAR_ACCESS_TOKEN));
-    return forwarder(new Request(request, { headers }));
-  }
-
-  // 2. Pipedream-routable host?
+  // 1. Pipedream-routable host?  (Linear included.)
   const appSlug = resolveAppSlug(host);
   if (appSlug && props.userId && options.accountLookup) {
     const accountId = await options.accountLookup(props.userId, appSlug);
@@ -546,7 +544,7 @@ export async function handleGatewayRequest(
     });
   }
 
-  // 3. Unknown host — reject.
+  // 2. Unknown host — reject.
   return new Response(
     JSON.stringify({
       error: "unknown_host",
@@ -633,20 +631,21 @@ describe("handleGatewayRequest — Pipedream routing", () => {
     expect(sentReq.url).toContain("external_user_id=u-1");
   });
 
-  it("still hardcodes api.linear.app (unchanged)", async () => {
+  it("routes api.linear.app through Pipedream (not hardcoded anymore)", async () => {
     const forwarder = vi
       .fn()
       .mockResolvedValue(new Response("ok", { status: 200 }));
+    const accountLookup = vi.fn().mockResolvedValue("apn_linear_1");
     await handleGatewayRequest(
       new Request("https://api.linear.app/graphql", { method: "POST" }),
-      { LINEAR_ACCESS_TOKEN: "lin_test" } as unknown as Env,
+      makeEnv(),
       { userId: "u-1" },
-      { forwarder }
+      { forwarder, accountLookup }
     );
+    expect(accountLookup).toHaveBeenCalledWith("u-1", "linear");
     const sentReq = forwarder.mock.calls[0][0] as Request;
-    expect(sentReq.headers.get("Authorization")).toMatch(
-      /^lin_test|Bearer lin_test/
-    );
+    expect(sentReq.url).toContain("api.pipedream.com/v1/connect/");
+    expect(sentReq.url).toContain("account_id=apn_linear_1");
   });
 
   it("rejects unknown hosts even when accountLookup is provided", async () => {
@@ -784,7 +783,7 @@ If it doesn't, capture the error (browser console, wrangler logs, or the returne
 **1. Spec coverage:**
 
 - ✅ Unknown-host rejection preserved (`unknown_host` 403).
-- ✅ Linear hardcoded path preserved (no migration risk to existing prod).
+- ✅ Linear migrated to Pipedream path — no more hardcoded `api.linear.app` branch.
 - ✅ Any Pipedream-mapped host + connected user routes through Pipedream.
 - ✅ Missing-connection case returns informative 403.
 - ✅ Integration point for the subagent/handler fetch is unchanged (`globalOutbound: HttpGateway` still the only interception point).
@@ -803,7 +802,7 @@ If it doesn't, capture the error (browser console, wrangler logs, or the returne
 
 ## Future Work (noted, not planned here)
 
-- **Migrate Linear to Pipedream** (Phase C or beyond). Would remove the hardcoded `LINEAR_ACCESS_TOKEN` from env + wrangler secrets, collapse the gateway to a single Pipedream path for all apps. Requires all existing users to connect Linear via Pipedream first; for the trial demo we accept the dual path.
+- **Remove `LINEAR_ACCESS_TOKEN` env secret** (Phase D). Still used by `registerLinearWebhook` in `src/integrations/linear-api.ts` for the create_sync flow; Phase D replaces that with agent-authored webhook registration, at which point the env var can go.
 - **Multi-account-per-app** (V2). Currently a user has one `account_id` per app. If someone wants two Slack workspaces, they'd need two accounts. Schema change: primary key becomes `(user_id, app_slug, account_id)` plus a `label` column for disambiguation.
 - **Request timeout / Pipedream 30s limit.** Pipedream returns 504 if the upstream takes over 30s. We don't currently add our own abort signal — fine for demo; worth an `AbortController` with a 25s cutoff in production.
 - **Response header passthrough.** Today the gateway returns whatever Pipedream returned. Pipedream may add its own headers (e.g., `x-pd-*`). Fine for demo; production might want to strip them.
