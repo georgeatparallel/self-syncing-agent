@@ -23,24 +23,57 @@
  *     error }; drains the cursor so side effects commit.
  *
  * The agent's handler.js contract: export a function
- *   `handleWebhook(request: Request, sql: SqlStorage): Promise<Response>`
+ *   `handleWebhook(request: Request, sql: SqlStorage, ctx?): Promise<Response>`
  * where `sql` is this.ctx.storage.sql (call sql.exec(query, ...args) and
- * sql.exec(query, ...args).toArray() for reads).
+ * sql.exec(query, ...args).toArray() for reads). The optional third `ctx`
+ * arg provides `{ agent, waitUntil }`: `agent` is a preconfigured subagent
+ * runner (built from this.env.LLM + an RpcTarget bridge to this facet's
+ * sql/fetch/userId) that the handler can invoke to process the webhook
+ * with an LLM; `waitUntil` forwards to this.ctx.waitUntil for background
+ * work. Older handlers that take only (request, sql) continue to work —
+ * JS ignores the extra arg.
  */
 export const FACET_WRAPPER_SOURCE = `
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, RpcTarget } from "cloudflare:workers";
 import { SCHEMA_DDL } from "./schema.js";
 import { handleWebhook } from "./handler.js";
+import { createAgent } from "./agent.js";
+
+class FacetAgentBridge extends RpcTarget {
+  #sql;
+  #fetch;
+  #userId;
+  constructor(deps) {
+    super();
+    this.#sql = deps.sql;
+    this.#fetch = deps.fetch;
+    this.#userId = deps.userId;
+  }
+  async sqlQuery(query) {
+    return this.#sql.exec(query).toArray();
+  }
+  async sqlExec(query, ...bindings) {
+    try {
+      const cursor = this.#sql.exec(query, ...bindings);
+      cursor.toArray();
+      return { ok: true, rowsWritten: cursor.rowsWritten, rowsRead: cursor.rowsRead };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  async gatewayFetch(url, init) {
+    return this.#fetch(url, init);
+  }
+  async getUserId() {
+    return this.#userId;
+  }
+}
 
 export class App extends DurableObject {
   #schemaApplied = false;
 
   #ensureSchema() {
     if (this.#schemaApplied) return;
-    // Run each DDL statement. The agent-authored schema_ddl may contain
-    // multiple statements separated by ';'. We split rather than passing
-    // the whole string because SqlStorage.exec only runs one statement
-    // at a time.
     for (const stmt of splitStatements(SCHEMA_DDL)) {
       if (stmt.trim()) this.ctx.storage.sql.exec(stmt);
     }
@@ -49,36 +82,31 @@ export class App extends DurableObject {
 
   async fetch(request) {
     this.#ensureSchema();
-    return handleWebhook(request, this.ctx.storage.sql);
+    const bridge = new FacetAgentBridge({
+      sql: this.ctx.storage.sql,
+      fetch: (url, init) => fetch(url, init),
+      userId: this.ctx.props ? this.ctx.props.userId : ""
+    });
+    const agent = createAgent({ llm: this.env.LLM, bridge });
+    const ctx = {
+      agent,
+      waitUntil: (p) => this.ctx.waitUntil(p)
+    };
+    return handleWebhook(request, this.ctx.storage.sql, ctx);
   }
 
-  // Supervisor-only probe. Touching the facet forces Worker Loader to
-  // compile the bundle; if the agent's handler.js has a syntax error,
-  // missing handleWebhook export, or any other load-time failure, this
-  // call rejects and the supervisor's try/catch rolls back. Double
-  // underscore discourages the agent from shadowing it in handler.js.
   async __supervisorPing() {}
 
-  // Supervisor-only query path. Tool layer enforces SELECT/WITH-only;
-  // this method is power-not-policy. Catches SQLite errors so a bad
-  // query from the user can't wedge the facet.
   async __query(sql) {
     this.#ensureSchema();
     try {
       const rows = this.ctx.storage.sql.exec(sql).toArray();
       return { ok: true, rows };
     } catch (e) {
-      return {
-        ok: false,
-        error: e instanceof Error ? e.message : String(e)
-      };
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
   }
 
-  // Supervisor-only write path used by run_in_sync's exec isolate. Runs
-  // whatever statement + bindings the caller passes; trust comes from the
-  // tool's approval gate, not this method. Drains the cursor so INSERTs
-  // actually commit.
   async __sqlExec(sql, ...bindings) {
     this.#ensureSchema();
     try {
@@ -99,10 +127,6 @@ export class App extends DurableObject {
 }
 
 function splitStatements(ddl) {
-  // Naive splitter — adequate for the agent-written schemas we expect
-  // (CREATE TABLE, CREATE INDEX, ALTER TABLE). If an agent generates
-  // triggers or stored procedures with embedded ';' this would break;
-  // not in scope for V1.
   return ddl.split(/;\\s*\\n/).map((s) => s.trim()).filter(Boolean);
 }
 `;
