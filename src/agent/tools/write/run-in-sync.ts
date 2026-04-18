@@ -20,6 +20,19 @@ type ExecFail = {
   logs: LogEntry[];
 };
 
+type NotFoundResult = { error: "not_found"; sync_id: string };
+type OkResult = { ok: true; result: unknown; logs: LogEntry[] };
+type OkTruncatedResult = {
+  ok: true;
+  result: null;
+  truncated: true;
+  serialized_bytes: number;
+  logs: LogEntry[];
+};
+// ExecFail (already declared) covers both the wrapper-passed failure
+// and the outer-catch failure from this tool, since their shapes align.
+type RunInSyncResult = NotFoundResult | OkResult | OkTruncatedResult | ExecFail;
+
 interface ExecRunner {
   run(facet: unknown): Promise<ExecOk | ExecFail>;
 }
@@ -47,7 +60,7 @@ export function runInSyncTool(agent: ChatAgent) {
         )
     }),
     needsApproval: true,
-    execute: async ({ sync_id, code }) => {
+    execute: async ({ sync_id, code }): Promise<RunInSyncResult> => {
       const sql = agent.sql.bind(agent);
       const sync = getSyncById(sql, sync_id);
       if (!sync) return { error: "not_found" as const, sync_id };
