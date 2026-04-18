@@ -18,6 +18,12 @@ import {
   touchSyncUpdatedAt
 } from "./db/syncs";
 import { logSyncError, getRecentSyncErrors } from "./db/sync-errors";
+import {
+  upsertConnectedAccount,
+  listConnectedAccounts
+} from "./db/connected-accounts";
+import type { ConnectedAccount } from "./db/types";
+import { getCachedAccessToken, createConnectToken } from "./pipedream";
 import { attachFacet } from "./facet/loader";
 import { verifyLinearSignature } from "./webhook/hmac";
 
@@ -313,6 +319,58 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
     };
   }
 
+  /**
+   * Mint a short-lived Pipedream connect token scoped to this user. The
+   * token is handed to Pipedream's Connect Link UI so the user can complete
+   * OAuth without us brokering credentials. No DB access — this.env holds
+   * the project/client creds, and the cached access_token lives in a
+   * module-level map in token-cache.ts.
+   *
+   * userId is a parameter (not read from this.name) because this method is
+   * reached via direct RPC from the Hono route, which bypasses the Agents
+   * SDK routing that would normally call setName(). Same pattern as
+   * handleWebhookDelivery/getSyncDetails.
+   */
+  async mintPipedreamToken(
+    userId: string
+  ): Promise<{ token: string; connectLinkUrl: string }> {
+    await this.setName(userId);
+    const accessToken = await getCachedAccessToken(this.env);
+    return createConnectToken(this.env, accessToken, userId);
+  }
+
+  /**
+   * Persist a (user_id, app_slug, account_id) mapping after a successful
+   * Pipedream Connect flow. Idempotent via INSERT OR REPLACE on the
+   * composite PK — re-connecting the same app for the same user overwrites
+   * the prior account_id. Bumps the change-tick so the sidebar refetches.
+   */
+  async persistPipedreamAccount(
+    userId: string,
+    app_slug: string,
+    account_id: string
+  ): Promise<void> {
+    await this.setName(userId);
+    this.#ensureSchema();
+    upsertConnectedAccount(this.sql.bind(this), {
+      user_id: userId,
+      app_slug,
+      account_id,
+      connected_at: Date.now()
+    });
+    this.#bumpChangeTick();
+  }
+
+  /**
+   * List all connected accounts for this user, newest-first. Supervisor-
+   * SQLite-only; no facet attach.
+   */
+  async listPipedreamAccounts(userId: string): Promise<ConnectedAccount[]> {
+    await this.setName(userId);
+    this.#ensureSchema();
+    return listConnectedAccounts(this.sql.bind(this), userId);
+  }
+
   @callable()
   async addServer(name: string, url: string) {
     return await this.addMcpServer(name, url);
@@ -427,6 +485,31 @@ app.get("/api/user/:userId/syncs/:syncId/details", async (c) => {
   const details = await stub.getSyncDetails(userId, syncId);
   if (!details) return c.json({ error: "not_found" }, 404);
   return c.json(details);
+});
+
+app.post("/api/user/:userId/pipedream/token", async (c) => {
+  const { userId } = c.req.param();
+  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+  const result = await stub.mintPipedreamToken(userId);
+  return c.json(result);
+});
+
+app.post("/api/user/:userId/pipedream/account", async (c) => {
+  const { userId } = c.req.param();
+  const body = await c.req.json<{ app_slug?: string; account_id?: string }>();
+  if (!body.app_slug || !body.account_id) {
+    return c.json({ error: "missing_fields" }, 400);
+  }
+  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+  await stub.persistPipedreamAccount(userId, body.app_slug, body.account_id);
+  return c.json({ ok: true });
+});
+
+app.get("/api/user/:userId/pipedream/accounts", async (c) => {
+  const { userId } = c.req.param();
+  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+  const accounts = await stub.listPipedreamAccounts(userId);
+  return c.json({ accounts });
 });
 
 // Fallthrough: everything else (chat WebSocket upgrade, MCP, etc.)
