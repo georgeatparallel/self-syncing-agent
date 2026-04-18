@@ -3,6 +3,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { resolveModelId } from "./models";
+import { handleGatewayRequest } from "../proxy/http-gateway";
 import type { AgentRequest, AgentResult } from "./types";
 import type { FacetAgentBridge } from "./facet-agent-bridge";
 
@@ -60,7 +61,7 @@ class ExecFacetShim extends RpcTarget {
 export async function runAgent(
   request: AgentRequest,
   bridge: FacetAgentBridge,
-  env: { ANTHROPIC_API_KEY: string; LOADER: WorkerLoader }
+  env: Env
 ): Promise<AgentResult> {
   const tier = request.model ?? "sonnet";
   const modelId = resolveModelId(tier);
@@ -83,7 +84,7 @@ export async function runAgent(
     }),
     fetch: tool({
       description:
-        "Make an HTTP request through the facet's credential-injecting proxy. Upstream auth is injected automatically for known hosts.",
+        "Make an HTTP request through the supervisor's credential-injecting proxy. Upstream auth is injected automatically for known hosts (e.g., api.linear.app); unknown hosts return 403.",
       inputSchema: z.object({
         url: z.string(),
         method: z.string().default("GET"),
@@ -91,7 +92,12 @@ export async function runAgent(
         body: z.string().optional()
       }),
       execute: async ({ url, method, headers, body }) => {
-        const res = await bridge.gatewayFetch(url, { method, headers, body });
+        // Invoke the gateway policy directly — we're already on the
+        // supervisor side, the facet bounce adds 3 isolate hops per
+        // fetch for no benefit. Policy still lives in one place
+        // (handleGatewayRequest in src/proxy/http-gateway.ts).
+        const req = new Request(url, { method, headers, body });
+        const res = await handleGatewayRequest(req, env, { userId });
         const text = await res.text();
         return { status: res.status, body: text };
       }

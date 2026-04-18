@@ -2,29 +2,27 @@ import { RpcTarget } from "cloudflare:workers";
 
 interface BridgeDeps {
   sql: SqlStorage;
-  fetch: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
   userId: string;
 }
 
 /**
  * Bridge passed to LLMGateway.runAgent so the supervisor-side ReAct
- * loop can call back into facet capabilities. Mirrors the RpcTarget
- * pattern used by src/execrunner/facet-bridge.ts — raw DO stubs don't
- * cross Worker Loader isolate boundaries, RpcTarget subclasses do.
+ * loop can reach into the facet's SQLite. Mirrors the RpcTarget pattern
+ * in src/execrunner/facet-bridge.ts — raw DO stubs don't cross Worker
+ * Loader isolate boundaries, RpcTarget subclasses do.
  *
- * Scope: sql + fetch only. The exec tool is implemented on the
- * LLMGateway side (it has env.LOADER); this bridge just carries the
- * userId so exec isolates get stamped with the right props.
+ * Scope: SQL only. Fetch and exec run supervisor-side — fetch via
+ * handleGatewayRequest (same policy, no facet bounce), exec via
+ * env.LOADER. userId is carried so the supervisor can stamp exec
+ * isolates and fetch-policy calls with the right principal.
  */
 export class FacetAgentBridge extends RpcTarget {
   #sql: SqlStorage;
-  #fetch: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
   #userId: string;
 
   constructor(deps: BridgeDeps) {
     super();
     this.#sql = deps.sql;
-    this.#fetch = deps.fetch;
     this.#userId = deps.userId;
   }
 
@@ -50,10 +48,6 @@ export class FacetAgentBridge extends RpcTarget {
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
-  }
-
-  async gatewayFetch(url: string, init?: RequestInit): Promise<Response> {
-    return this.#fetch(url, init);
   }
 
   async getUserId(): Promise<string> {

@@ -165,7 +165,7 @@ function installSubAgentFacet(
   instance: unknown,
   userId: string,
   sql: SqlStorage,
-  env: { ANTHROPIC_API_KEY: string; LOADER: WorkerLoader }
+  env: Env
 ): { restore: () => void; pendingWork: Promise<unknown>[] } {
   // Apply schema once, same as the wrapper's #ensureSchema().
   for (const stmt of SCHEMA_DDL.split(/;\s*\n/)
@@ -180,12 +180,7 @@ function installSubAgentFacet(
     get() {
       return {
         fetch: async (req: Request) => {
-          const bridge = new FacetAgentBridge({
-            sql,
-            fetch: (url: RequestInfo, init?: RequestInit) =>
-              globalThis.fetch(url as never, init as never),
-            userId
-          });
+          const bridge = new FacetAgentBridge({ sql, userId });
           let callsInFlight = 0;
           const agent = async (request: unknown): Promise<string> => {
             if (callsInFlight > 0) {

@@ -12,8 +12,12 @@ vi.mock("ai", async () => {
 vi.mock("@ai-sdk/anthropic", () => ({
   createAnthropic: vi.fn(() => (id: string) => ({ id }))
 }));
+vi.mock("../proxy/http-gateway", () => ({
+  handleGatewayRequest: vi.fn()
+}));
 
 import { generateText } from "ai";
+import { handleGatewayRequest } from "../proxy/http-gateway";
 
 const baseReq: AgentRequest = {
   model: "sonnet",
@@ -24,14 +28,14 @@ const baseReq: AgentRequest = {
 const fakeBridge = {
   sqlQuery: vi.fn(),
   sqlExec: vi.fn(),
-  gatewayFetch: vi.fn(),
   getUserId: vi.fn().mockResolvedValue("u-1")
 };
 
 const fakeEnv = {
   ANTHROPIC_API_KEY: "k",
+  LINEAR_ACCESS_TOKEN: "lin",
   LOADER: {} as WorkerLoader
-};
+} as unknown as Env;
 
 describe("runAgent", () => {
   beforeEach(() => {
@@ -150,7 +154,7 @@ describe("runAgent", () => {
     expect(fakeBridge.sqlExec).toHaveBeenCalledWith("SELECT 1");
   });
 
-  it("wires fetch tool to bridge.gatewayFetch and returns { status, body }", async () => {
+  it("wires fetch tool to handleGatewayRequest (supervisor-side, no facet bounce)", async () => {
     vi.mocked(generateText).mockImplementation((async (opts: unknown) => {
       const tools = (
         opts as {
@@ -173,17 +177,15 @@ describe("runAgent", () => {
         usage: { inputTokens: 0, outputTokens: 0 }
       } as unknown as Awaited<ReturnType<typeof generateText>>;
     }) as unknown as typeof generateText);
-    fakeBridge.gatewayFetch.mockResolvedValue(
+    vi.mocked(handleGatewayRequest).mockResolvedValue(
       new Response("created", { status: 201 })
     );
     await runAgent(baseReq, fakeBridge as never, fakeEnv);
-    expect(fakeBridge.gatewayFetch).toHaveBeenCalledWith(
-      "https://api.linear.app/graphql",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: '{"query":"x"}'
-      }
-    );
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+    const [req, env, props] = vi.mocked(handleGatewayRequest).mock.calls[0];
+    expect(req.url).toBe("https://api.linear.app/graphql");
+    expect(req.method).toBe("POST");
+    expect(env).toBe(fakeEnv);
+    expect(props).toEqual({ userId: "u-1" });
   });
 });
