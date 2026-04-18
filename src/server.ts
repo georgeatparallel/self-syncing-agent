@@ -103,14 +103,21 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
   // this.name — the webhook path reaches the DO via direct RPC and
   // bypasses the Agents SDK routing that normally calls setName().
   // On a cold-started instance (webhook delivery after DO hibernated),
-  // this.name throws. Accepting userId as a parameter keeps this method
-  // self-contained and avoids depending on SDK name-hydration behavior.
+  // this.name throws.
+  //
+  // Phase 13 introduced #bumpChangeTick() in the finally block below,
+  // which calls this.setState(...). The SDK's setState internally emits
+  // to all connected clients and reads this.name to tag the broadcast —
+  // so simply accepting userId as a parameter isn't enough anymore; we
+  // have to hydrate this.name explicitly. setName is idempotent (no-op
+  // if already set) and does not re-trigger onStart.
   async handleWebhookDelivery(
     userId: string,
     syncId: string,
     bodyBytes: ArrayBuffer,
     signatureHex: string | null
   ): Promise<{ status: number; body: string }> {
+    await this.setName(userId);
     this.#ensureSchema();
     const sql = this.sql.bind(this);
     const sync = getSyncById(sql, syncId);
