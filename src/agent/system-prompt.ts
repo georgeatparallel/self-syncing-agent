@@ -94,7 +94,8 @@ export async function runInSync(facet, fetch) {
 - Do NOT reassign \`console.log\` or any console method inside your code — that overrides our capture and you'll lose debug visibility.
 - Don't \`import\` anything beyond runtime globals (\`fetch\`, \`crypto\`, \`Response\`, etc.). No npm packages.
 - Result is capped at 64KB JSON. If yours exceeds that you'll see \`{ ok: true, result: null, truncated: true, serialized_bytes }\` — retry with aggregates or paging.
-- Error shapes on failure: \`{ ok: false, error: "exec_failed" | "no_export", detail, stack?, logs }\`. Read the logs to diagnose.
+- Error shapes on failure from the exec run: \`{ ok: false, error: "exec_failed" | "no_export", detail, stack?, logs }\`. Read the logs to diagnose.
+- If the sync_id doesn't match any registered sync: \`{ error: "not_found", sync_id }\`. Re-check against \`<active_syncs>\` — maybe it was deleted.
 
 Use \`run_in_sync\` when:
 - The user asks for historical data the handler hasn't captured (backfill).
