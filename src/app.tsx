@@ -1,6 +1,7 @@
 import { Suspense, useCallback, useState, useEffect, useRef } from "react";
 import { useAgent } from "agents/react";
 import { getOrMintUserId, userIdFromPath, userPath } from "./identity";
+import { SyncPanel } from "./ui/SyncPanel";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import type { MCPServersState } from "agents";
@@ -446,500 +447,523 @@ function Chat() {
   }, [input, attachments, isStreaming, sendMessage]);
 
   return (
-    <div
-      className="flex flex-col h-screen bg-kumo-elevated relative"
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
-      {isDragging && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-kumo-elevated/80 backdrop-blur-sm border-2 border-dashed border-kumo-brand rounded-xl m-2 pointer-events-none">
-          <div className="flex flex-col items-center gap-2 text-kumo-brand">
-            <ImageIcon size={40} />
-            <Text variant="heading3">Drop images here</Text>
-          </div>
-        </div>
-      )}
-
-      {/* Header */}
-      <header className="px-5 py-4 bg-kumo-base border-b border-kumo-line">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold text-kumo-default">
-              <span className="mr-2">⛅</span>Agent Starter
-            </h1>
-            <Badge variant="secondary">
-              <ChatCircleDotsIcon size={12} weight="bold" className="mr-1" />
-              AI Chat
-            </Badge>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-1.5">
-              <CircleIcon
-                size={8}
-                weight="fill"
-                className={connected ? "text-kumo-success" : "text-kumo-danger"}
-              />
-              <Text size="xs" variant="secondary">
-                {connected ? "Connected" : "Disconnected"}
-              </Text>
+    <div className="flex h-screen bg-kumo-elevated">
+      <SyncPanel
+        userId={userId}
+        syncChangeTick={
+          (agent.state as { syncChangeTick?: number } | undefined)
+            ?.syncChangeTick
+        }
+      />
+      <div
+        className="flex-1 flex flex-col relative"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {isDragging && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-kumo-elevated/80 backdrop-blur-sm border-2 border-dashed border-kumo-brand rounded-xl m-2 pointer-events-none">
+            <div className="flex flex-col items-center gap-2 text-kumo-brand">
+              <ImageIcon size={40} />
+              <Text variant="heading3">Drop images here</Text>
             </div>
-            <div className="flex items-center gap-1.5">
-              <BugIcon size={14} className="text-kumo-inactive" />
-              <Switch
-                checked={showDebug}
-                onCheckedChange={setShowDebug}
-                size="sm"
-                aria-label="Toggle debug mode"
-              />
-            </div>
-            <ThemeToggle />
-            <div className="relative" ref={mcpPanelRef}>
-              <Button
-                variant="secondary"
-                icon={<PlugsConnectedIcon size={16} />}
-                onClick={() => setShowMcpPanel(!showMcpPanel)}
-              >
-                MCP
-                {mcpToolCount > 0 && (
-                  <Badge variant="primary" className="ml-1.5">
-                    <WrenchIcon size={10} className="mr-0.5" />
-                    {mcpToolCount}
-                  </Badge>
-                )}
-              </Button>
+          </div>
+        )}
 
-              {/* MCP Dropdown Panel */}
-              {showMcpPanel && (
-                <div className="absolute right-0 top-full mt-2 w-96 z-50">
-                  <Surface className="rounded-xl ring ring-kumo-line shadow-lg p-4 space-y-4">
-                    {/* Panel Header */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <PlugsConnectedIcon
-                          size={16}
-                          className="text-kumo-accent"
+        {/* Header */}
+        <header className="px-5 py-4 bg-kumo-base border-b border-kumo-line">
+          <div className="max-w-3xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <h1 className="text-lg font-semibold text-kumo-default">
+                <span className="mr-2">⛅</span>Agent Starter
+              </h1>
+              <Badge variant="secondary">
+                <ChatCircleDotsIcon size={12} weight="bold" className="mr-1" />
+                AI Chat
+              </Badge>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5">
+                <CircleIcon
+                  size={8}
+                  weight="fill"
+                  className={
+                    connected ? "text-kumo-success" : "text-kumo-danger"
+                  }
+                />
+                <Text size="xs" variant="secondary">
+                  {connected ? "Connected" : "Disconnected"}
+                </Text>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <BugIcon size={14} className="text-kumo-inactive" />
+                <Switch
+                  checked={showDebug}
+                  onCheckedChange={setShowDebug}
+                  size="sm"
+                  aria-label="Toggle debug mode"
+                />
+              </div>
+              <ThemeToggle />
+              <div className="relative" ref={mcpPanelRef}>
+                <Button
+                  variant="secondary"
+                  icon={<PlugsConnectedIcon size={16} />}
+                  onClick={() => setShowMcpPanel(!showMcpPanel)}
+                >
+                  MCP
+                  {mcpToolCount > 0 && (
+                    <Badge variant="primary" className="ml-1.5">
+                      <WrenchIcon size={10} className="mr-0.5" />
+                      {mcpToolCount}
+                    </Badge>
+                  )}
+                </Button>
+
+                {/* MCP Dropdown Panel */}
+                {showMcpPanel && (
+                  <div className="absolute right-0 top-full mt-2 w-96 z-50">
+                    <Surface className="rounded-xl ring ring-kumo-line shadow-lg p-4 space-y-4">
+                      {/* Panel Header */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <PlugsConnectedIcon
+                            size={16}
+                            className="text-kumo-accent"
+                          />
+                          <Text size="sm" bold>
+                            MCP Servers
+                          </Text>
+                          {serverEntries.length > 0 && (
+                            <Badge variant="secondary">
+                              {serverEntries.length}
+                            </Badge>
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          shape="square"
+                          aria-label="Close MCP panel"
+                          icon={<XIcon size={14} />}
+                          onClick={() => setShowMcpPanel(false)}
                         />
-                        <Text size="sm" bold>
-                          MCP Servers
-                        </Text>
-                        {serverEntries.length > 0 && (
-                          <Badge variant="secondary">
-                            {serverEntries.length}
-                          </Badge>
-                        )}
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        shape="square"
-                        aria-label="Close MCP panel"
-                        icon={<XIcon size={14} />}
-                        onClick={() => setShowMcpPanel(false)}
-                      />
-                    </div>
 
-                    {/* Add Server Form */}
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        handleAddServer();
-                      }}
-                      className="space-y-2"
-                    >
-                      <input
-                        type="text"
-                        value={mcpName}
-                        onChange={(e) => setMcpName(e.target.value)}
-                        placeholder="Server name"
-                        className="w-full px-3 py-1.5 text-sm rounded-lg border border-kumo-line bg-kumo-base text-kumo-default placeholder:text-kumo-inactive focus:outline-none focus:ring-1 focus:ring-kumo-accent"
-                      />
-                      <div className="flex gap-2">
+                      {/* Add Server Form */}
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleAddServer();
+                        }}
+                        className="space-y-2"
+                      >
                         <input
                           type="text"
-                          value={mcpUrl}
-                          onChange={(e) => setMcpUrl(e.target.value)}
-                          placeholder="https://mcp.example.com"
-                          className="flex-1 px-3 py-1.5 text-sm rounded-lg border border-kumo-line bg-kumo-base text-kumo-default placeholder:text-kumo-inactive focus:outline-none focus:ring-1 focus:ring-kumo-accent font-mono"
+                          value={mcpName}
+                          onChange={(e) => setMcpName(e.target.value)}
+                          placeholder="Server name"
+                          className="w-full px-3 py-1.5 text-sm rounded-lg border border-kumo-line bg-kumo-base text-kumo-default placeholder:text-kumo-inactive focus:outline-none focus:ring-1 focus:ring-kumo-accent"
                         />
-                        <Button
-                          type="submit"
-                          variant="primary"
-                          size="sm"
-                          icon={<PlusIcon size={14} />}
-                          disabled={
-                            isAddingServer || !mcpName.trim() || !mcpUrl.trim()
-                          }
-                        >
-                          {isAddingServer ? "..." : "Add"}
-                        </Button>
-                      </div>
-                    </form>
-
-                    {/* Server List */}
-                    {serverEntries.length > 0 && (
-                      <div className="space-y-2 max-h-60 overflow-y-auto">
-                        {serverEntries.map(([id, server]) => (
-                          <div
-                            key={id}
-                            className="flex items-start justify-between p-2.5 rounded-lg border border-kumo-line"
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={mcpUrl}
+                            onChange={(e) => setMcpUrl(e.target.value)}
+                            placeholder="https://mcp.example.com"
+                            className="flex-1 px-3 py-1.5 text-sm rounded-lg border border-kumo-line bg-kumo-base text-kumo-default placeholder:text-kumo-inactive focus:outline-none focus:ring-1 focus:ring-kumo-accent font-mono"
+                          />
+                          <Button
+                            type="submit"
+                            variant="primary"
+                            size="sm"
+                            icon={<PlusIcon size={14} />}
+                            disabled={
+                              isAddingServer ||
+                              !mcpName.trim() ||
+                              !mcpUrl.trim()
+                            }
                           >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-kumo-default truncate">
-                                  {server.name}
-                                </span>
-                                <Badge
-                                  variant={
-                                    server.state === "ready"
-                                      ? "primary"
-                                      : server.state === "failed"
-                                        ? "destructive"
-                                        : "secondary"
-                                  }
-                                >
-                                  {server.state}
-                                </Badge>
-                              </div>
-                              <span className="text-xs font-mono text-kumo-subtle truncate block mt-0.5">
-                                {server.server_url}
-                              </span>
-                              {server.state === "failed" && server.error && (
-                                <span className="text-xs text-red-500 block mt-0.5">
-                                  {server.error}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0 ml-2">
-                              {server.state === "authenticating" &&
-                                server.auth_url && (
-                                  <Button
-                                    variant="primary"
-                                    size="sm"
-                                    icon={<SignInIcon size={12} />}
-                                    onClick={() =>
-                                      window.open(
-                                        server.auth_url as string,
-                                        "oauth",
-                                        "width=600,height=800"
-                                      )
+                            {isAddingServer ? "..." : "Add"}
+                          </Button>
+                        </div>
+                      </form>
+
+                      {/* Server List */}
+                      {serverEntries.length > 0 && (
+                        <div className="space-y-2 max-h-60 overflow-y-auto">
+                          {serverEntries.map(([id, server]) => (
+                            <div
+                              key={id}
+                              className="flex items-start justify-between p-2.5 rounded-lg border border-kumo-line"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-kumo-default truncate">
+                                    {server.name}
+                                  </span>
+                                  <Badge
+                                    variant={
+                                      server.state === "ready"
+                                        ? "primary"
+                                        : server.state === "failed"
+                                          ? "destructive"
+                                          : "secondary"
                                     }
                                   >
-                                    Auth
-                                  </Button>
+                                    {server.state}
+                                  </Badge>
+                                </div>
+                                <span className="text-xs font-mono text-kumo-subtle truncate block mt-0.5">
+                                  {server.server_url}
+                                </span>
+                                {server.state === "failed" && server.error && (
+                                  <span className="text-xs text-red-500 block mt-0.5">
+                                    {server.error}
+                                  </span>
                                 )}
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                shape="square"
-                                aria-label="Remove server"
-                                icon={<TrashIcon size={12} />}
-                                onClick={() => handleRemoveServer(id)}
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0 ml-2">
+                                {server.state === "authenticating" &&
+                                  server.auth_url && (
+                                    <Button
+                                      variant="primary"
+                                      size="sm"
+                                      icon={<SignInIcon size={12} />}
+                                      onClick={() =>
+                                        window.open(
+                                          server.auth_url as string,
+                                          "oauth",
+                                          "width=600,height=800"
+                                        )
+                                      }
+                                    >
+                                      Auth
+                                    </Button>
+                                  )}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  shape="square"
+                                  aria-label="Remove server"
+                                  icon={<TrashIcon size={12} />}
+                                  onClick={() => handleRemoveServer(id)}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Tool Summary */}
+                      {mcpToolCount > 0 && (
+                        <div className="pt-2 border-t border-kumo-line">
+                          <div className="flex items-center gap-2">
+                            <WrenchIcon
+                              size={14}
+                              className="text-kumo-subtle"
+                            />
+                            <span className="text-xs text-kumo-subtle">
+                              {mcpToolCount} tool
+                              {mcpToolCount !== 1 ? "s" : ""} available from MCP
+                              servers
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                    </Surface>
+                  </div>
+                )}
+              </div>
+              <Button
+                variant="secondary"
+                icon={<TrashIcon size={16} />}
+                onClick={clearHistory}
+              >
+                Clear
+              </Button>
+            </div>
+          </div>
+        </header>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-3xl mx-auto px-5 py-6 space-y-5">
+            {messages.length === 0 && (
+              <Empty
+                icon={<ChatCircleDotsIcon size={32} />}
+                title="Start a conversation"
+                contents={
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {[
+                      "What's the weather in Paris?",
+                      "What timezone am I in?",
+                      "Calculate 5000 * 3",
+                      "Remind me in 5 minutes to take a break"
+                    ].map((prompt) => (
+                      <Button
+                        key={prompt}
+                        variant="outline"
+                        size="sm"
+                        disabled={isStreaming}
+                        onClick={() => {
+                          sendMessage({
+                            role: "user",
+                            parts: [{ type: "text", text: prompt }]
+                          });
+                        }}
+                      >
+                        {prompt}
+                      </Button>
+                    ))}
+                  </div>
+                }
+              />
+            )}
+
+            {messages.map((message: UIMessage, index: number) => {
+              const isUser = message.role === "user";
+              const isLastAssistant =
+                message.role === "assistant" && index === messages.length - 1;
+
+              return (
+                <div key={message.id} className="space-y-2">
+                  {showDebug && (
+                    <pre className="text-[11px] text-kumo-subtle bg-kumo-control rounded-lg p-3 overflow-auto max-h-64">
+                      {JSON.stringify(message, null, 2)}
+                    </pre>
+                  )}
+
+                  {/* Tool parts */}
+                  {message.parts.filter(isToolUIPart).map((part) => (
+                    <ToolPartView
+                      key={part.toolCallId}
+                      part={part}
+                      addToolApprovalResponse={addToolApprovalResponse}
+                    />
+                  ))}
+
+                  {/* Reasoning parts */}
+                  {message.parts
+                    .filter(
+                      (part) =>
+                        part.type === "reasoning" &&
+                        (part as { text?: string }).text?.trim()
+                    )
+                    .map((part, i) => {
+                      const reasoning = part as {
+                        type: "reasoning";
+                        text: string;
+                        state?: "streaming" | "done";
+                      };
+                      const isDone = reasoning.state === "done" || !isStreaming;
+                      return (
+                        <div key={i} className="flex justify-start">
+                          <details
+                            className="max-w-[85%] w-full"
+                            open={!isDone}
+                          >
+                            <summary className="flex items-center gap-2 cursor-pointer px-3 py-2 rounded-lg bg-purple-500/10 border border-purple-500/20 text-sm select-none">
+                              <BrainIcon
+                                size={14}
+                                className="text-purple-400"
                               />
+                              <span className="font-medium text-kumo-default">
+                                Reasoning
+                              </span>
+                              {isDone ? (
+                                <span className="text-xs text-kumo-success">
+                                  Complete
+                                </span>
+                              ) : (
+                                <span className="text-xs text-kumo-brand">
+                                  Thinking...
+                                </span>
+                              )}
+                              <CaretDownIcon
+                                size={14}
+                                className="ml-auto text-kumo-inactive"
+                              />
+                            </summary>
+                            <pre className="mt-2 px-3 py-2 rounded-lg bg-kumo-control text-xs text-kumo-default whitespace-pre-wrap overflow-auto max-h-64">
+                              {reasoning.text}
+                            </pre>
+                          </details>
+                        </div>
+                      );
+                    })}
+
+                  {/* Image parts */}
+                  {message.parts
+                    .filter(
+                      (part): part is Extract<typeof part, { type: "file" }> =>
+                        part.type === "file" &&
+                        (part as { mediaType?: string }).mediaType?.startsWith(
+                          "image/"
+                        ) === true
+                    )
+                    .map((part, i) => (
+                      <div
+                        key={`file-${i}`}
+                        className={`flex ${isUser ? "justify-end" : "justify-start"}`}
+                      >
+                        <img
+                          src={part.url}
+                          alt="Attachment"
+                          className="max-h-64 rounded-xl border border-kumo-line object-contain"
+                        />
+                      </div>
+                    ))}
+
+                  {/* Text parts */}
+                  {message.parts
+                    .filter((part) => part.type === "text")
+                    .map((part, i) => {
+                      const text = (part as { type: "text"; text: string })
+                        .text;
+                      if (!text) return null;
+
+                      if (isUser) {
+                        return (
+                          <div key={i} className="flex justify-end">
+                            <div className="max-w-[85%] px-4 py-2.5 rounded-2xl rounded-br-md bg-kumo-contrast text-kumo-inverse leading-relaxed">
+                              {text}
                             </div>
                           </div>
-                        ))}
-                      </div>
-                    )}
+                        );
+                      }
 
-                    {/* Tool Summary */}
-                    {mcpToolCount > 0 && (
-                      <div className="pt-2 border-t border-kumo-line">
-                        <div className="flex items-center gap-2">
-                          <WrenchIcon size={14} className="text-kumo-subtle" />
-                          <span className="text-xs text-kumo-subtle">
-                            {mcpToolCount} tool
-                            {mcpToolCount !== 1 ? "s" : ""} available from MCP
-                            servers
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </Surface>
-                </div>
-              )}
-            </div>
-            <Button
-              variant="secondary"
-              icon={<TrashIcon size={16} />}
-              onClick={clearHistory}
-            >
-              Clear
-            </Button>
-          </div>
-        </div>
-      </header>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-5 py-6 space-y-5">
-          {messages.length === 0 && (
-            <Empty
-              icon={<ChatCircleDotsIcon size={32} />}
-              title="Start a conversation"
-              contents={
-                <div className="flex flex-wrap justify-center gap-2">
-                  {[
-                    "What's the weather in Paris?",
-                    "What timezone am I in?",
-                    "Calculate 5000 * 3",
-                    "Remind me in 5 minutes to take a break"
-                  ].map((prompt) => (
-                    <Button
-                      key={prompt}
-                      variant="outline"
-                      size="sm"
-                      disabled={isStreaming}
-                      onClick={() => {
-                        sendMessage({
-                          role: "user",
-                          parts: [{ type: "text", text: prompt }]
-                        });
-                      }}
-                    >
-                      {prompt}
-                    </Button>
-                  ))}
-                </div>
-              }
-            />
-          )}
-
-          {messages.map((message: UIMessage, index: number) => {
-            const isUser = message.role === "user";
-            const isLastAssistant =
-              message.role === "assistant" && index === messages.length - 1;
-
-            return (
-              <div key={message.id} className="space-y-2">
-                {showDebug && (
-                  <pre className="text-[11px] text-kumo-subtle bg-kumo-control rounded-lg p-3 overflow-auto max-h-64">
-                    {JSON.stringify(message, null, 2)}
-                  </pre>
-                )}
-
-                {/* Tool parts */}
-                {message.parts.filter(isToolUIPart).map((part) => (
-                  <ToolPartView
-                    key={part.toolCallId}
-                    part={part}
-                    addToolApprovalResponse={addToolApprovalResponse}
-                  />
-                ))}
-
-                {/* Reasoning parts */}
-                {message.parts
-                  .filter(
-                    (part) =>
-                      part.type === "reasoning" &&
-                      (part as { text?: string }).text?.trim()
-                  )
-                  .map((part, i) => {
-                    const reasoning = part as {
-                      type: "reasoning";
-                      text: string;
-                      state?: "streaming" | "done";
-                    };
-                    const isDone = reasoning.state === "done" || !isStreaming;
-                    return (
-                      <div key={i} className="flex justify-start">
-                        <details className="max-w-[85%] w-full" open={!isDone}>
-                          <summary className="flex items-center gap-2 cursor-pointer px-3 py-2 rounded-lg bg-purple-500/10 border border-purple-500/20 text-sm select-none">
-                            <BrainIcon size={14} className="text-purple-400" />
-                            <span className="font-medium text-kumo-default">
-                              Reasoning
-                            </span>
-                            {isDone ? (
-                              <span className="text-xs text-kumo-success">
-                                Complete
-                              </span>
-                            ) : (
-                              <span className="text-xs text-kumo-brand">
-                                Thinking...
-                              </span>
-                            )}
-                            <CaretDownIcon
-                              size={14}
-                              className="ml-auto text-kumo-inactive"
-                            />
-                          </summary>
-                          <pre className="mt-2 px-3 py-2 rounded-lg bg-kumo-control text-xs text-kumo-default whitespace-pre-wrap overflow-auto max-h-64">
-                            {reasoning.text}
-                          </pre>
-                        </details>
-                      </div>
-                    );
-                  })}
-
-                {/* Image parts */}
-                {message.parts
-                  .filter(
-                    (part): part is Extract<typeof part, { type: "file" }> =>
-                      part.type === "file" &&
-                      (part as { mediaType?: string }).mediaType?.startsWith(
-                        "image/"
-                      ) === true
-                  )
-                  .map((part, i) => (
-                    <div
-                      key={`file-${i}`}
-                      className={`flex ${isUser ? "justify-end" : "justify-start"}`}
-                    >
-                      <img
-                        src={part.url}
-                        alt="Attachment"
-                        className="max-h-64 rounded-xl border border-kumo-line object-contain"
-                      />
-                    </div>
-                  ))}
-
-                {/* Text parts */}
-                {message.parts
-                  .filter((part) => part.type === "text")
-                  .map((part, i) => {
-                    const text = (part as { type: "text"; text: string }).text;
-                    if (!text) return null;
-
-                    if (isUser) {
                       return (
-                        <div key={i} className="flex justify-end">
-                          <div className="max-w-[85%] px-4 py-2.5 rounded-2xl rounded-br-md bg-kumo-contrast text-kumo-inverse leading-relaxed">
-                            {text}
+                        <div key={i} className="flex justify-start">
+                          <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-kumo-base text-kumo-default leading-relaxed">
+                            <Streamdown
+                              className="sd-theme rounded-2xl rounded-bl-md p-3"
+                              plugins={{ code }}
+                              controls={false}
+                              isAnimating={isLastAssistant && isStreaming}
+                            >
+                              {text}
+                            </Streamdown>
                           </div>
                         </div>
                       );
-                    }
-
-                    return (
-                      <div key={i} className="flex justify-start">
-                        <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-kumo-base text-kumo-default leading-relaxed">
-                          <Streamdown
-                            className="sd-theme rounded-2xl rounded-bl-md p-3"
-                            plugins={{ code }}
-                            controls={false}
-                            isAnimating={isLastAssistant && isStreaming}
-                          >
-                            {text}
-                          </Streamdown>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            );
-          })}
-
-          <div ref={messagesEndRef} />
-        </div>
-      </div>
-
-      {/* Input */}
-      <div className="border-t border-kumo-line bg-kumo-base">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            send();
-          }}
-          className="max-w-3xl mx-auto px-5 py-4"
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => {
-              if (e.target.files) addFiles(e.target.files);
-              e.target.value = "";
-            }}
-          />
-
-          {attachments.length > 0 && (
-            <div className="flex gap-2 mb-2 flex-wrap">
-              {attachments.map((att) => (
-                <div
-                  key={att.id}
-                  className="relative group rounded-lg border border-kumo-line bg-kumo-control overflow-hidden"
-                >
-                  <img
-                    src={att.preview}
-                    alt={att.file.name}
-                    className="h-16 w-16 object-cover"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeAttachment(att.id)}
-                    className="absolute top-0.5 right-0.5 rounded-full bg-kumo-contrast/80 text-kumo-inverse p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                    aria-label={`Remove ${att.file.name}`}
-                  >
-                    <XIcon size={10} />
-                  </button>
+                    })}
                 </div>
-              ))}
-            </div>
-          )}
+              );
+            })}
 
-          <div className="flex items-end gap-3 rounded-xl border border-kumo-line bg-kumo-base p-3 shadow-sm focus-within:ring-2 focus-within:ring-kumo-ring focus-within:border-transparent transition-shadow">
-            <Button
-              type="button"
-              variant="ghost"
-              shape="square"
-              aria-label="Attach images"
-              icon={<PaperclipIcon size={18} />}
-              onClick={() => fileInputRef.current?.click()}
-              disabled={!connected || isStreaming}
-              className="mb-0.5"
-            />
-            <InputArea
-              ref={textareaRef}
-              value={input}
-              onValueChange={setInput}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+
+        {/* Input */}
+        <div className="border-t border-kumo-line bg-kumo-base">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              send();
+            }}
+            className="max-w-3xl mx-auto px-5 py-4"
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) addFiles(e.target.files);
+                e.target.value = "";
               }}
-              onInput={(e) => {
-                const el = e.currentTarget;
-                el.style.height = "auto";
-                el.style.height = `${el.scrollHeight}px`;
-              }}
-              onPaste={handlePaste}
-              placeholder={
-                attachments.length > 0
-                  ? "Add a message or send images..."
-                  : "Send a message..."
-              }
-              disabled={!connected || isStreaming}
-              rows={1}
-              className="flex-1 ring-0! focus:ring-0! shadow-none! bg-transparent! outline-none! resize-none max-h-40"
             />
-            {isStreaming ? (
+
+            {attachments.length > 0 && (
+              <div className="flex gap-2 mb-2 flex-wrap">
+                {attachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="relative group rounded-lg border border-kumo-line bg-kumo-control overflow-hidden"
+                  >
+                    <img
+                      src={att.preview}
+                      alt={att.file.name}
+                      className="h-16 w-16 object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(att.id)}
+                      className="absolute top-0.5 right-0.5 rounded-full bg-kumo-contrast/80 text-kumo-inverse p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                      aria-label={`Remove ${att.file.name}`}
+                    >
+                      <XIcon size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-end gap-3 rounded-xl border border-kumo-line bg-kumo-base p-3 shadow-sm focus-within:ring-2 focus-within:ring-kumo-ring focus-within:border-transparent transition-shadow">
               <Button
                 type="button"
-                variant="secondary"
+                variant="ghost"
                 shape="square"
-                aria-label="Stop generation"
-                icon={<StopIcon size={18} />}
-                onClick={stop}
+                aria-label="Attach images"
+                icon={<PaperclipIcon size={18} />}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={!connected || isStreaming}
                 className="mb-0.5"
               />
-            ) : (
-              <Button
-                type="submit"
-                variant="primary"
-                shape="square"
-                aria-label="Send message"
-                disabled={
-                  (!input.trim() && attachments.length === 0) || !connected
+              <InputArea
+                ref={textareaRef}
+                value={input}
+                onValueChange={setInput}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                onInput={(e) => {
+                  const el = e.currentTarget;
+                  el.style.height = "auto";
+                  el.style.height = `${el.scrollHeight}px`;
+                }}
+                onPaste={handlePaste}
+                placeholder={
+                  attachments.length > 0
+                    ? "Add a message or send images..."
+                    : "Send a message..."
                 }
-                icon={<PaperPlaneRightIcon size={18} />}
-                className="mb-0.5"
+                disabled={!connected || isStreaming}
+                rows={1}
+                className="flex-1 ring-0! focus:ring-0! shadow-none! bg-transparent! outline-none! resize-none max-h-40"
               />
-            )}
-          </div>
-        </form>
+              {isStreaming ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  shape="square"
+                  aria-label="Stop generation"
+                  icon={<StopIcon size={18} />}
+                  onClick={stop}
+                  className="mb-0.5"
+                />
+              ) : (
+                <Button
+                  type="submit"
+                  variant="primary"
+                  shape="square"
+                  aria-label="Send message"
+                  disabled={
+                    (!input.trim() && attachments.length === 0) || !connected
+                  }
+                  icon={<PaperPlaneRightIcon size={18} />}
+                  className="mb-0.5"
+                />
+              )}
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );
