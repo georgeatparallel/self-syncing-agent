@@ -63,11 +63,16 @@ describe("runAgent", () => {
     } as unknown as Awaited<ReturnType<typeof generateText>>);
 
     await runAgent(
-      { system: "s", messages: [{ role: "user", content: "x" }] } as AgentRequest,
+      {
+        system: "s",
+        messages: [{ role: "user", content: "x" }]
+      } as AgentRequest,
       fakeBridge as never,
       fakeEnv
     );
-    const call = vi.mocked(generateText).mock.calls[0][0] as unknown as { model: { id: string } };
+    const call = vi.mocked(generateText).mock.calls[0][0] as unknown as {
+      model: { id: string };
+    };
     expect(call.model.id).toBe("claude-sonnet-4-6");
   });
 
@@ -112,12 +117,23 @@ describe("runAgent", () => {
   it("returns { ok: false } when generateText throws", async () => {
     vi.mocked(generateText).mockRejectedValue(new Error("network blew up"));
     const result = await runAgent(baseReq, fakeBridge as never, fakeEnv);
-    expect(result).toEqual({ ok: false, error: "llm_failed", detail: "network blew up" });
+    expect(result).toEqual({
+      ok: false,
+      error: "llm_failed",
+      detail: "network blew up"
+    });
   });
 
   it("wires sql tool to bridge.sqlExec", async () => {
     vi.mocked(generateText).mockImplementation((async (opts: unknown) => {
-      const tools = (opts as { tools: Record<string, { execute: (input: unknown) => Promise<unknown> }> }).tools;
+      const tools = (
+        opts as {
+          tools: Record<
+            string,
+            { execute: (input: unknown) => Promise<unknown> }
+          >;
+        }
+      ).tools;
       await tools.sql.execute({ query: "SELECT 1" });
       return {
         text: "done",
@@ -125,14 +141,25 @@ describe("runAgent", () => {
         usage: { inputTokens: 0, outputTokens: 0 }
       } as unknown as Awaited<ReturnType<typeof generateText>>;
     }) as unknown as typeof generateText);
-    fakeBridge.sqlExec.mockResolvedValue({ ok: true, rowsWritten: 0, rowsRead: 1 });
+    fakeBridge.sqlExec.mockResolvedValue({
+      ok: true,
+      rowsWritten: 0,
+      rowsRead: 1
+    });
     await runAgent(baseReq, fakeBridge as never, fakeEnv);
     expect(fakeBridge.sqlExec).toHaveBeenCalledWith("SELECT 1");
   });
 
   it("wires fetch tool to bridge.gatewayFetch and returns { status, body }", async () => {
     vi.mocked(generateText).mockImplementation((async (opts: unknown) => {
-      const tools = (opts as { tools: Record<string, { execute: (input: unknown) => Promise<unknown> }> }).tools;
+      const tools = (
+        opts as {
+          tools: Record<
+            string,
+            { execute: (input: unknown) => Promise<unknown> }
+          >;
+        }
+      ).tools;
       const out = await tools.fetch.execute({
         url: "https://api.linear.app/graphql",
         method: "POST",
@@ -146,12 +173,17 @@ describe("runAgent", () => {
         usage: { inputTokens: 0, outputTokens: 0 }
       } as unknown as Awaited<ReturnType<typeof generateText>>;
     }) as unknown as typeof generateText);
-    fakeBridge.gatewayFetch.mockResolvedValue(new Response("created", { status: 201 }));
+    fakeBridge.gatewayFetch.mockResolvedValue(
+      new Response("created", { status: 201 })
+    );
     await runAgent(baseReq, fakeBridge as never, fakeEnv);
-    expect(fakeBridge.gatewayFetch).toHaveBeenCalledWith("https://api.linear.app/graphql", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: '{"query":"x"}'
-    });
+    expect(fakeBridge.gatewayFetch).toHaveBeenCalledWith(
+      "https://api.linear.app/graphql",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"query":"x"}'
+      }
+    );
   });
 });

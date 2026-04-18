@@ -103,9 +103,13 @@ export async function runAgent(
       execute: async ({ code }) => {
         const { buildExecWorkerCode } = await import("../execrunner/bundle");
         const bundle = buildExecWorkerCode({ code, userId });
-        const stub = (env.LOADER as unknown as {
-          load: (c: unknown) => { getEntrypoint: () => { run: (f: unknown) => Promise<unknown> } };
-        }).load(bundle);
+        const stub = (
+          env.LOADER as unknown as {
+            load: (c: unknown) => {
+              getEntrypoint: () => { run: (f: unknown) => Promise<unknown> };
+            };
+          }
+        ).load(bundle);
         const shim = new ExecFacetShim(bridge);
         return stub.getEntrypoint().run(shim);
       }
@@ -143,7 +147,10 @@ interface LLMGatewayProps {
 }
 
 export class LLMGateway extends WorkerEntrypoint<Env, LLMGatewayProps> {
-  async runAgent(request: AgentRequest, bridge: FacetAgentBridge): Promise<AgentResult> {
+  async runAgent(
+    request: AgentRequest,
+    bridge: FacetAgentBridge
+  ): Promise<AgentResult> {
     // this.env is the supervisor worker's env — has ANTHROPIC_API_KEY
     // and LOADER both from wrangler.jsonc.
     return runAgent(request, bridge, this.env);

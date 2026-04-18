@@ -5,6 +5,7 @@
 **Goal:** Expose an `agent()` primitive to agent-authored webhook handler code so a handler can spawn a ReAct-loop sub-agent per delivery with built-in tools (`fetch`, `sql`, `exec`) — implementing the V2-stretch "webhook-spawned background agents" ask from the spec.
 
 **Architecture:**
+
 - A new `LLMGateway` `WorkerEntrypoint` in the supervisor holds `ANTHROPIC_API_KEY` and runs the full `generateText` ReAct loop. It is stamped per-user (`ctx.props.userId`) and exposed to every facet via the facet bundle's `env` field.
 - Handler code receives a third argument, `ctx`, carrying `agent()` and `waitUntil()`. A `FacetAgentBridge` `RpcTarget` (mirrors the existing `FacetBridge` pattern) exposes the facet's `sql`, `globalOutbound` fetch, and a fresh-isolate `exec` capability to the supervisor-side agent loop.
 - Built-in tools (`fetch`, `sql`, `exec`) live in the supervisor's `LLMGateway` and route every call back to the bridge. The `exec` tool spins a fresh Worker Loader isolate per call, reusing the existing `run_in_sync` exec-runner wrapper.
@@ -16,6 +17,7 @@
 ## File Structure
 
 **New files:**
+
 - `src/agent-runtime/llm-gateway.ts` — `LLMGateway` `WorkerEntrypoint`. Owns the Anthropic key, runs the ReAct loop, wires built-in tools to the bridge. Exported from `src/server.ts` so it's available in `ctx.exports`.
 - `src/agent-runtime/facet-agent-bridge.ts` — `FacetAgentBridge` `RpcTarget`. Exposes `sqlExec`, `sqlQuery`, `gatewayFetch`, `execScript` to `LLMGateway`. One instance per handler invocation.
 - `src/agent-runtime/agent-primitive-source.ts` — fixed ES-module source that will be bundled into every facet as `agent.js`. Exports `createAgent({ llm, bridgeStamp, loader, sql, fetch, userId })` which returns the user-facing `agent()` function.
@@ -26,6 +28,7 @@
 - `tests/subagent-e2e.test.ts` — end-to-end: create a sync whose handler calls `agent()`, deliver a webhook, assert the triage column gets populated.
 
 **Modified files:**
+
 - `src/facet/bundle.ts` — add a fourth module `agent.js`, pass `env: { LLM, LOADER }` in the bundle.
 - `src/facet/wrapper.ts` — import `createAgent` from `./agent.js`, build a `FacetAgentBridge`, pass `ctx = { agent, waitUntil }` as the 3rd arg to `handleWebhook`.
 - `src/server.ts` — export `LLMGateway`; use `ctx.exports.LLMGateway({ props: { userId } })` inside `buildFacetWorkerCode` (wired via a new `input` field).
@@ -39,6 +42,7 @@
 ## Task 1: Model tier enum
 
 **Files:**
+
 - Create: `src/agent-runtime/models.ts`
 - Test: `src/agent-runtime/models.test.ts`
 
@@ -105,6 +109,7 @@ git commit -m "feat(subagent): model tier enum for webhook sub-agent primitive"
 ## Task 2: Shared types module
 
 **Files:**
+
 - Create: `src/agent-runtime/types.ts`
 
 - [ ] **Step 1: Write the type file**
@@ -118,14 +123,18 @@ export interface AgentRequest {
   model?: ModelTier; // default "sonnet"
   system: string;
   messages: Array<
-    | { role: "user"; content: string }
-    | { role: "assistant"; content: string }
+    { role: "user"; content: string } | { role: "assistant"; content: string }
   >;
   maxSteps?: number; // default 8, capped at 15
 }
 
 export type AgentResult =
-  | { ok: true; text: string; steps: number; usage: { input_tokens: number; output_tokens: number } }
+  | {
+      ok: true;
+      text: string;
+      steps: number;
+      usage: { input_tokens: number; output_tokens: number };
+    }
   | { ok: false; error: string; detail?: string };
 
 /** Third argument passed to the agent-authored handleWebhook. */
@@ -140,8 +149,18 @@ export interface ExecToolInput {
 }
 
 export type ExecToolResult =
-  | { ok: true; result: unknown; logs: Array<{ level: string; message: string; ts: number }> }
-  | { ok: false; error: string; detail?: string; stack?: string | null; logs: Array<{ level: string; message: string; ts: number }> };
+  | {
+      ok: true;
+      result: unknown;
+      logs: Array<{ level: string; message: string; ts: number }>;
+    }
+  | {
+      ok: false;
+      error: string;
+      detail?: string;
+      stack?: string | null;
+      logs: Array<{ level: string; message: string; ts: number }>;
+    };
 ```
 
 - [ ] **Step 2: Verify it compiles**
@@ -161,6 +180,7 @@ git commit -m "feat(subagent): shared types for webhook sub-agent primitive"
 ## Task 3: FacetAgentBridge
 
 **Files:**
+
 - Create: `src/agent-runtime/facet-agent-bridge.ts`
 - Test: `src/agent-runtime/facet-agent-bridge.test.ts`
 
@@ -301,11 +321,18 @@ export class FacetAgentBridge extends RpcTarget {
   async sqlExec(
     query: string,
     ...bindings: unknown[]
-  ): Promise<{ ok: true; rowsWritten: number; rowsRead: number } | { ok: false; error: string }> {
+  ): Promise<
+    | { ok: true; rowsWritten: number; rowsRead: number }
+    | { ok: false; error: string }
+  > {
     try {
       const cursor = this.#sql.exec(query, ...bindings);
       cursor.toArray();
-      return { ok: true, rowsWritten: cursor.rowsWritten, rowsRead: cursor.rowsRead };
+      return {
+        ok: true,
+        rowsWritten: cursor.rowsWritten,
+        rowsRead: cursor.rowsRead
+      };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
@@ -338,6 +365,7 @@ git commit -m "feat(subagent): FacetAgentBridge RpcTarget for sql/fetch/exec cal
 ## Task 4: LLMGateway WorkerEntrypoint
 
 **Files:**
+
 - Create: `src/agent-runtime/llm-gateway.ts`
 - Test: `src/agent-runtime/llm-gateway.test.ts`
 
@@ -389,7 +417,11 @@ describe("runAgent", () => {
       usage: { inputTokens: 10, outputTokens: 5 }
     } as unknown as Awaited<ReturnType<typeof generateText>>);
 
-    const result = await runAgent(baseReq, fakeBridge as never, { ANTHROPIC_API_KEY: "k" } as Env);
+    const result = await runAgent(
+      baseReq,
+      fakeBridge as never,
+      { ANTHROPIC_API_KEY: "k" } as Env
+    );
     expect(result).toEqual({
       ok: true,
       text: "hello back",
@@ -406,11 +438,16 @@ describe("runAgent", () => {
     } as unknown as Awaited<ReturnType<typeof generateText>>);
 
     await runAgent(
-      { system: "s", messages: [{ role: "user", content: "x" }] } as AgentRequest,
+      {
+        system: "s",
+        messages: [{ role: "user", content: "x" }]
+      } as AgentRequest,
       fakeBridge as never,
       { ANTHROPIC_API_KEY: "k" } as Env
     );
-    const call = vi.mocked(generateText).mock.calls[0][0] as { model: { id: string } };
+    const call = vi.mocked(generateText).mock.calls[0][0] as {
+      model: { id: string };
+    };
     expect(call.model.id).toBe("claude-sonnet-4-6");
   });
 
@@ -427,19 +464,36 @@ describe("runAgent", () => {
       { ANTHROPIC_API_KEY: "k" } as Env
     );
     // stopWhen is a function that returns true at step >= 15
-    const call = vi.mocked(generateText).mock.calls[0][0] as { stopWhen: unknown };
+    const call = vi.mocked(generateText).mock.calls[0][0] as {
+      stopWhen: unknown;
+    };
     expect(call.stopWhen).toBeDefined();
   });
 
   it("returns { ok: false } when generateText throws", async () => {
     vi.mocked(generateText).mockRejectedValue(new Error("network blew up"));
-    const result = await runAgent(baseReq, fakeBridge as never, { ANTHROPIC_API_KEY: "k" } as Env);
-    expect(result).toEqual({ ok: false, error: "llm_failed", detail: "network blew up" });
+    const result = await runAgent(
+      baseReq,
+      fakeBridge as never,
+      { ANTHROPIC_API_KEY: "k" } as Env
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: "llm_failed",
+      detail: "network blew up"
+    });
   });
 
   it("wires sql tool to bridge.sqlExec", async () => {
     vi.mocked(generateText).mockImplementation(async (opts: never) => {
-      const tools = (opts as unknown as { tools: Record<string, { execute: (input: unknown) => Promise<unknown> }> }).tools;
+      const tools = (
+        opts as unknown as {
+          tools: Record<
+            string,
+            { execute: (input: unknown) => Promise<unknown> }
+          >;
+        }
+      ).tools;
       await tools.sql.execute({ query: "SELECT 1" });
       return {
         text: "done",
@@ -447,8 +501,16 @@ describe("runAgent", () => {
         usage: { inputTokens: 0, outputTokens: 0 }
       } as unknown as Awaited<ReturnType<typeof generateText>>;
     });
-    fakeBridge.sqlExec.mockResolvedValue({ ok: true, rowsWritten: 0, rowsRead: 1 });
-    await runAgent(baseReq, fakeBridge as never, { ANTHROPIC_API_KEY: "k" } as Env);
+    fakeBridge.sqlExec.mockResolvedValue({
+      ok: true,
+      rowsWritten: 0,
+      rowsRead: 1
+    });
+    await runAgent(
+      baseReq,
+      fakeBridge as never,
+      { ANTHROPIC_API_KEY: "k" } as Env
+    );
     expect(fakeBridge.sqlExec).toHaveBeenCalledWith("SELECT 1");
   });
 });
@@ -529,9 +591,13 @@ export async function runAgent(
         // Import lazily to keep the module tree testable in isolation.
         const { buildExecWorkerCode } = await import("../execrunner/bundle");
         const bundle = buildExecWorkerCode({ code, userId });
-        const stub = (env.LOADER as unknown as {
-          load: (c: unknown) => { getEntrypoint: () => { run: (f: unknown) => Promise<unknown> } };
-        }).load(bundle);
+        const stub = (
+          env.LOADER as unknown as {
+            load: (c: unknown) => {
+              getEntrypoint: () => { run: (f: unknown) => Promise<unknown> };
+            };
+          }
+        ).load(bundle);
         return stub.getEntrypoint().run(null);
       }
     })
@@ -550,8 +616,11 @@ export async function runAgent(
       text: result.text,
       steps: Array.isArray(result.steps) ? result.steps.length : 0,
       usage: {
-        input_tokens: (result.usage as unknown as { inputTokens: number }).inputTokens ?? 0,
-        output_tokens: (result.usage as unknown as { outputTokens: number }).outputTokens ?? 0
+        input_tokens:
+          (result.usage as unknown as { inputTokens: number }).inputTokens ?? 0,
+        output_tokens:
+          (result.usage as unknown as { outputTokens: number }).outputTokens ??
+          0
       }
     };
   } catch (e) {
@@ -568,7 +637,10 @@ interface LLMGatewayProps {
 }
 
 export class LLMGateway extends WorkerEntrypoint<Env, LLMGatewayProps> {
-  async runAgent(request: AgentRequest, bridge: FacetAgentBridge): Promise<AgentResult> {
+  async runAgent(
+    request: AgentRequest,
+    bridge: FacetAgentBridge
+  ): Promise<AgentResult> {
     // this.env is the supervisor worker's env — has ANTHROPIC_API_KEY
     // and LOADER both from wrangler.jsonc.
     return runAgent(request, bridge, this.env);
@@ -593,6 +665,7 @@ git commit -m "feat(subagent): LLMGateway with built-in sql/fetch/exec tools"
 ## Task 5: Export LLMGateway from server.ts
 
 **Files:**
+
 - Modify: `src/server.ts` (top-level exports)
 
 **Context:** `HttpGateway` is already re-exported from `src/server.ts` so `workerExports.HttpGateway` resolves at runtime (see `src/facet/bundle.ts:53-57`). We follow the identical pattern for `LLMGateway`.
@@ -627,6 +700,7 @@ git commit -m "feat(subagent): re-export LLMGateway so facets can reach it via w
 ## Task 6: Agent primitive source (bundled into facets as agent.js)
 
 **Files:**
+
 - Create: `src/agent-runtime/agent-primitive-source.ts`
 
 **Context:** This is a fixed ES-module string that becomes `agent.js` in every facet bundle. The wrapper imports `createAgent` from it and calls `handleWebhook(request, sql, ctx)` with `ctx.agent` pointing to the returned function.
@@ -689,6 +763,7 @@ git commit -m "feat(subagent): agent primitive ES-module source bundled into fac
 ## Task 7: Extend facet bundle to include agent.js + env bindings
 
 **Files:**
+
 - Modify: `src/facet/bundle.ts` (entire rewrite of `buildFacetWorkerCode`)
 - Test: `src/facet/bundle.test.ts` (new tests added)
 
@@ -704,7 +779,8 @@ describe("buildFacetWorkerCode — agent primitive", () => {
   it("includes agent.js alongside handler.js and schema.js", () => {
     const bundle = buildFacetWorkerCode({
       schemaDdl: "CREATE TABLE t (id INTEGER);",
-      handlerCode: "export async function handleWebhook() { return new Response('ok'); }",
+      handlerCode:
+        "export async function handleWebhook() { return new Response('ok'); }",
       userId: "u-123"
     });
     expect(Object.keys(bundle.modules).sort()).toEqual([
@@ -762,7 +838,9 @@ export function buildFacetWorkerCode(
 ): WorkerCode {
   const exportsRef = workerExports as unknown as {
     HttpGateway: (opts: { props: unknown }) => Fetcher;
-    LLMGateway: (opts: { props: unknown }) => { runAgent: (...args: unknown[]) => unknown };
+    LLMGateway: (opts: { props: unknown }) => {
+      runAgent: (...args: unknown[]) => unknown;
+    };
   };
 
   return {
@@ -804,6 +882,7 @@ git commit -m "feat(subagent): bundle agent.js into facets + pass LLM binding in
 ## Task 8: Wire ctx.agent into FACET_WRAPPER_SOURCE
 
 **Files:**
+
 - Modify: `src/facet/wrapper.ts` (the `FACET_WRAPPER_SOURCE` string)
 
 **Context:** The wrapper's `fetch()` currently calls `handleWebhook(request, this.ctx.storage.sql)`. We extend the signature to pass a `ctx` object with `agent` and `waitUntil`. The wrapper constructs a `FacetAgentBridge`, imports `createAgent` from `./agent.js`, and composes the final function.
@@ -924,6 +1003,7 @@ git commit -m "feat(subagent): pass ctx (agent, waitUntil) to handleWebhook"
 ## Task 9: Update create-sync tool description for the new handler contract
 
 **Files:**
+
 - Modify: `src/agent/tools/write/create-sync.ts` (description + handler_code input schema describe)
 
 - [ ] **Step 1: Find the handler_code contract text**
@@ -989,6 +1069,7 @@ git commit -m "docs(subagent): teach create_sync about the agent() primitive"
 ## Task 10: Mirror the update_sync description
 
 **Files:**
+
 - Modify: `src/agent/tools/write/update-sync.ts`
 
 - [ ] **Step 1: Update handler_code describe in update-sync.ts**
@@ -1022,6 +1103,7 @@ git commit -m "docs(subagent): align update_sync handler contract with create_sy
 ## Task 11: Teach the main agent about the primitive
 
 **Files:**
+
 - Modify: `src/agent/system-prompt.ts`
 
 - [ ] **Step 1: Add a "Webhook sub-agents" section before "Response style"**
@@ -1059,6 +1141,7 @@ git commit -m "docs(subagent): teach main agent when to use the agent() primitiv
 ## Task 12: End-to-end smoke test (vitest-pool-workers)
 
 **Files:**
+
 - Create: `tests/subagent-e2e.test.ts`
 
 **Context:** Verifies the end-to-end path: a sync whose handler calls `ctx.agent(...)` actually gets a triage string written back via `sql.exec`. Uses the fake-facets pattern from `tests/per-user-do.test.ts` and mocks the Anthropic generateText call to return a deterministic string.
@@ -1135,6 +1218,7 @@ git commit -m "test(subagent): E2E handler → ctx.agent → sql.exec round-trip
 ## Task 13: Full check + deploy
 
 **Files:**
+
 - None (CI-based)
 
 - [ ] **Step 1: Run the full check**
@@ -1153,11 +1237,13 @@ git push origin main
 ```bash
 gh run watch $(gh run list --workflow=deploy.yml --limit 1 --json databaseId -q '.[0].databaseId') --exit-status
 ```
+
 Expected: deploy step green.
 
 - [ ] **Step 4: Smoke test on prod**
 
 Open `https://self-syncing-agent.pandaronit25.workers.dev` and ask the agent:
+
 > "Create a sync for Linear issues. When a priority=1 issue arrives, use a sub-agent to write a one-sentence triage note into a `triage` column. Use sonnet."
 
 The agent should write a handler that uses `ctx.agent` inside `ctx.waitUntil`. After approval, trigger a urgent issue in Linear and verify the triage column populates within ~10-15s.
