@@ -803,6 +803,25 @@ If it doesn't, capture the error (browser console, wrangler logs, or the returne
 ## Future Work (noted, not planned here)
 
 - **Remove `LINEAR_ACCESS_TOKEN` env secret** (Phase D). Still used by `registerLinearWebhook` in `src/integrations/linear-api.ts` for the create_sync flow; Phase D replaces that with agent-authored webhook registration, at which point the env var can go.
+
+---
+
+## Threat model note — for the README security section
+
+During Phase B smoke testing, the agent pointed out that a Linear sync's handler can now call `api.github.com` (or any other app the user has connected) via the Pipedream path. On the surface this looks like a cross-integration credential escalation. **It isn't a bug in our model** — worth documenting explicitly:
+
+- This is a **single-user system** by design (no multi-tenancy). Each user's ChatAgent DO holds their own `connected_accounts` rows. Another user's sync cannot see or use this user's credentials — different DOs, different SQLite, different Pipedream `external_user_id`.
+- The trust boundary is **user ↔ their agent**, not sync ↔ sync. The user connected the apps, the user's agent wrote the handlers, the user approved them via the approval gate. A Linear handler that ends up calling Slack is "my agent using my Slack on my behalf" — not an escalation.
+- Cross-integration calls from a handler are a **feature**: the programmable-surface pitch (spec line 22) depends on it. Examples: urgent Linear issue → sub-agent checks GitHub for related PRs → posts triage note to Slack. Per-sync egress restriction would kill this.
+- **What IS protected:**
+  - Handler code never sees supervisor secrets (`ANTHROPIC_API_KEY`, raw OAuth tokens). Credentials are injected at the HttpGateway / Pipedream layer; the facet only sees responses.
+  - Handler code cannot reach arbitrary hosts — `unknown_host` 403 from HttpGateway if the hostname isn't in our map.
+  - One user's DO (including `connected_accounts`) is inaccessible from another user's handler. Enforced by Cloudflare's per-name DO routing.
+  - `globalOutbound: HttpGateway` makes the gateway the single egress chokepoint; facet code cannot bypass it.
+- **Defense-in-depth we DIDN'T add** and the rationale for not adding it: per-sync egress whitelist (sync declares which `app_slug`s it can call; gateway rejects others). Would block cross-integration use cases that the spec explicitly invites. Appropriate for a multi-tenant SaaS posture, not for this single-user trial submission.
+
+The README's security section should restate this explicitly so readers don't mistake the "a Linear handler can call GitHub" observation for a bug.
+
 - **Multi-account-per-app** (V2). Currently a user has one `account_id` per app. If someone wants two Slack workspaces, they'd need two accounts. Schema change: primary key becomes `(user_id, app_slug, account_id)` plus a `label` column for disambiguation.
 - **Request timeout / Pipedream 30s limit.** Pipedream returns 504 if the upstream takes over 30s. We don't currently add our own abort signal — fine for demo; worth an `AbortController` with a 25s cutoff in production.
 - **Response header passthrough.** Today the gateway returns whatever Pipedream returned. Pipedream may add its own headers (e.g., `x-pd-*`). Fine for demo; production might want to strip them.
