@@ -79,3 +79,22 @@ export function updateSync(sql: SqlTag, id: string, patch: SyncPatch): Sync {
 export function deleteSync(sql: SqlTag, id: string): void {
   sql`DELETE FROM syncs WHERE id = ${id}`;
 }
+
+/**
+ * Count sync_errors rows for a given sync since a ms-epoch cutoff. Used
+ * by the ops-panel summary endpoint to surface a red badge when a sync
+ * has produced errors in the last hour. The schema column is
+ * `occurred_at`; the parameter name stays `sinceMs` to read cleanly at
+ * the call site.
+ */
+export function getSyncErrorCountSince(
+  sql: SqlTag,
+  sync_id: string,
+  sinceMs: number
+): number {
+  const rows = sql<{ c: number }>`
+    SELECT COUNT(*) as c FROM sync_errors
+    WHERE sync_id = ${sync_id} AND occurred_at >= ${sinceMs}
+  `;
+  return rows[0]?.c ?? 0;
+}

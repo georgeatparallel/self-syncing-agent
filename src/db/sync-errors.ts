@@ -28,6 +28,25 @@ export function listSyncErrors(
   `;
 }
 
+/**
+ * Fetch the most recent sync_errors rows for a sync, newest first. Used
+ * by the ops-panel details endpoint. Similar to `listSyncErrors` but
+ * callers expecting plan-phrased naming can use this entry point; the
+ * SQL ordering matches `listSyncErrors` (by `occurred_at DESC`).
+ */
+export function getRecentSyncErrors(
+  sql: SqlTag,
+  sync_id: string,
+  limit: number
+): SyncError[] {
+  return sql<SyncError>`
+    SELECT * FROM sync_errors
+    WHERE sync_id = ${sync_id}
+    ORDER BY occurred_at DESC
+    LIMIT ${limit}
+  `;
+}
+
 export function getSyncErrorStats(
   sql: SqlTag,
   sinceMs: number

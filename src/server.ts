@@ -7,8 +7,8 @@ import { applySchemaMigrations } from "./db/schema";
 import { buildContextMessages } from "./agent/context";
 import { buildTools } from "./agent/tools";
 import { SYSTEM_PROMPT } from "./agent/system-prompt";
-import { getSyncById } from "./db/syncs";
-import { logSyncError } from "./db/sync-errors";
+import { getSyncById, listSyncs, getSyncErrorCountSince } from "./db/syncs";
+import { logSyncError, getRecentSyncErrors } from "./db/sync-errors";
 import { attachFacet } from "./facet/loader";
 import { verifyLinearSignature } from "./webhook/hmac";
 
@@ -120,6 +120,121 @@ export class ChatAgent extends AIChatAgent<Env> {
     }
   }
 
+  /**
+   * Supervisor-SQLite-only summary of this user's syncs. No facet attach —
+   * cheap enough to be safe on every signal-driven refetch. Fields are
+   * sized to what the sidebar card renders: id/name/integration/version,
+   * error count in the last hour (red badge if >0), last-updated timestamp.
+   */
+  async listSyncsSummary(): Promise<
+    Array<{
+      id: string;
+      name: string;
+      integration: string;
+      version: number;
+      error_count_1h: number;
+      updated_at: number;
+    }>
+  > {
+    const sql = this.sql.bind(this);
+    // Defensive: direct RPC calls bypass the Agents SDK's routing path
+    // that normally calls setName() → onStart(). For a fresh DO that's
+    // never been touched, the syncs table wouldn't exist yet. Calling
+    // the migration here is idempotent (CREATE TABLE IF NOT EXISTS).
+    applySchemaMigrations(sql);
+    const syncs = listSyncs(sql);
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    return syncs.map((s) => ({
+      id: s.id,
+      name: s.name,
+      integration: s.integration,
+      version: s.version,
+      error_count_1h: getSyncErrorCountSince(sql, s.id, oneHourAgo),
+      updated_at: s.updated_at
+    }));
+  }
+
+  /**
+   * Full per-sync payload for the sidebar's expanded card. Hits the facet
+   * via `__query` once per table to get row counts — more expensive than
+   * the summary, so this is fetched lazily when a user expands a card,
+   * not on every change-tick.
+   */
+  async getSyncDetails(syncId: string): Promise<{
+    sync: {
+      id: string;
+      name: string;
+      integration: string;
+      version: number;
+      handler_code: string;
+      schema_ddl: string;
+      updated_at: number;
+    };
+    row_counts: Record<string, number>;
+    errors: Array<{
+      created_at: number;
+      error_message: string;
+      stack_trace: string | null;
+      payload_preview: string | null;
+      handler_version: number;
+    }>;
+  } | null> {
+    const sql = this.sql.bind(this);
+    // Same rationale as listSyncsSummary: defensive idempotent migration
+    // for first-touch-via-RPC cases.
+    applySchemaMigrations(sql);
+    const sync = getSyncById(sql, syncId);
+    if (!sync) return null;
+
+    // Parse CREATE TABLE statements from the sync's schema_ddl to get the
+    // table names we should COUNT(*) against. Naive — splits on ";" then
+    // regex-matches the table name. Robust enough for the CREATE TABLE
+    // IF NOT EXISTS shape the agent writes; skips CREATE INDEX / other.
+    const tableNames = extractTableNames(sync.schema_ddl);
+
+    const facet = attachFacet(this.env, this.ctx.facets, sync, this.name);
+    const row_counts: Record<string, number> = {};
+    for (const table of tableNames) {
+      const result = await (
+        facet as unknown as {
+          __query: (
+            sql: string
+          ) => Promise<
+            | { ok: true; rows: Array<{ c: number }> }
+            | { ok: false; error: string }
+          >;
+        }
+      ).__query(`SELECT COUNT(*) as c FROM ${table}`);
+      row_counts[table] = result.ok ? (result.rows[0]?.c ?? 0) : 0;
+    }
+
+    // Re-map `occurred_at` (the schema column name) to `created_at` in
+    // the public API payload. The plan and the sidebar UI speak the
+    // `created_at` name, while the DB has historically used
+    // `occurred_at`.
+    const errors = getRecentSyncErrors(sql, syncId, 10).map((e) => ({
+      created_at: e.occurred_at,
+      error_message: e.error_message,
+      stack_trace: e.stack_trace,
+      payload_preview: e.payload_preview,
+      handler_version: e.handler_version
+    }));
+
+    return {
+      sync: {
+        id: sync.id,
+        name: sync.name,
+        integration: sync.integration,
+        version: sync.version,
+        handler_code: sync.handler_code,
+        schema_ddl: sync.schema_ddl,
+        updated_at: sync.updated_at
+      },
+      row_counts,
+      errors
+    };
+  }
+
   @callable()
   async addServer(name: string, url: string) {
     return await this.addMcpServer(name, url);
@@ -196,6 +311,21 @@ app.all("/webhook/:userId/:syncId", (c) =>
   c.text("method not allowed", 405, { Allow: "POST" })
 );
 
+app.get("/api/user/:userId/syncs-summary", async (c) => {
+  const { userId } = c.req.param();
+  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+  const syncs = await stub.listSyncsSummary();
+  return c.json({ syncs });
+});
+
+app.get("/api/user/:userId/syncs/:syncId/details", async (c) => {
+  const { userId, syncId } = c.req.param();
+  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+  const details = await stub.getSyncDetails(syncId);
+  if (!details) return c.json({ error: "not_found" }, 404);
+  return c.json(details);
+});
+
 // Fallthrough: everything else (chat WebSocket upgrade, MCP, etc.)
 // goes to the Agents SDK router.
 app.all("*", async (c) => {
@@ -218,4 +348,21 @@ const PAYLOAD_PREVIEW_MAX_BYTES = 2048;
 function payloadPreview(body: Uint8Array): string {
   const slice = body.subarray(0, PAYLOAD_PREVIEW_MAX_BYTES);
   return new TextDecoder("utf-8", { fatal: false }).decode(slice);
+}
+
+/**
+ * Pull table names from a `CREATE TABLE [IF NOT EXISTS] <name> (...)`
+ * sequence in the schema DDL. Skips CREATE INDEX / triggers / anything
+ * that isn't CREATE TABLE. Naive regex — sufficient for the schema
+ * shapes the agent is trained to emit.
+ */
+function extractTableNames(ddl: string): string[] {
+  const names: string[] = [];
+  const pattern =
+    /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`]?([a-zA-Z_][a-zA-Z0-9_]*)["`]?/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(ddl)) !== null) {
+    if (match[1]) names.push(match[1]);
+  }
+  return names;
 }
