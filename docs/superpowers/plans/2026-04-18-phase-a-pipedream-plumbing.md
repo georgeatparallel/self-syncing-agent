@@ -5,6 +5,7 @@
 **Goal:** Ship the foundation for Pipedream Connect: the per-user OAuth/account-connection flow, supervisor storage for those connections, and a short-lived-token mint endpoint for the frontend popup. After this phase, a user can click "Connect an app" in our UI, grant access via Pipedream's popup, and the resulting `account_id` lands in our supervisor SQLite keyed on `(user_id, app_slug)`. Nothing actually *uses* those credentials yet — that's Phase B (gateway routing).
 
 **Architecture:**
+
 - No Pipedream Node SDK on the server — the backend dance is 2 simple HTTP endpoints (`POST /oauth/token` for the bearer + `POST /connect/{projectId}/tokens` for the connect token), so we call them with raw `fetch`. Keeps the CF Workers bundle clean and avoids SDK runtime-compat risk.
 - The Pipedream OAuth bearer access_token (the one WE get in exchange for client_id/client_secret) has a 1h TTL — we cache it in a module-level Map keyed on the client_id. Each DO isolate gets its own cache copy; cold refresh on miss.
 - New supervisor SQLite table `connected_accounts (user_id, app_slug, account_id, connected_at)`.
@@ -20,6 +21,7 @@
 ## File Structure
 
 **New files:**
+
 - `src/pipedream/api.ts` — Pure pipedream-facing HTTP calls: `getAccessToken(env)`, `createConnectToken(env, accessToken, externalUserId)`. No caching — just the network dance.
 - `src/pipedream/token-cache.ts` — Module-level cache for the bearer access_token. Exposes `getCachedAccessToken(env)` that returns a valid token, refreshing if expired.
 - `src/pipedream/index.ts` — Re-exports for a clean import surface.
@@ -31,6 +33,7 @@
 - `src/ui/useConnections.ts` — React hook: fetches `/api/user/:userId/pipedream/accounts`; auto-refetches on `syncChangeTick`.
 
 **Modified files:**
+
 - `src/db/schema.ts` — add `connected_accounts` table to the migration array.
 - `src/db/types.ts` — add `ConnectedAccount` + `NewConnectedAccount` types.
 - `src/server.ts` — register three new Hono routes: `GET /api/user/:userId/pipedream/accounts`, `POST /api/user/:userId/pipedream/token`, `POST /api/user/:userId/pipedream/account`.
@@ -38,6 +41,7 @@
 - `package.json` — add `@pipedream/sdk` as a dep.
 
 **Infrastructure (not a code task, handled manually between deploy steps):**
+
 - `wrangler secret put PIPEDREAM_PROJECT_ID/CLIENT_ID/CLIENT_SECRET/ENVIRONMENT` — done after Phase F deploy, not part of this plan's automation.
 
 ---
@@ -45,6 +49,7 @@
 ## Task 1: DB schema — `connected_accounts` table
 
 **Files:**
+
 - Modify: `src/db/schema.ts`
 - Modify: `src/db/types.ts`
 
@@ -98,6 +103,7 @@ git commit -m "feat(pipedream): connected_accounts table + types"
 ## Task 2: DB CRUD helpers
 
 **Files:**
+
 - Create: `src/db/connected-accounts.ts`
 - Create: `src/db/connected-accounts.test.ts`
 
@@ -242,6 +248,7 @@ git commit -m "feat(pipedream): connected_accounts CRUD helpers"
 ## Task 3: Pipedream HTTP dance — `src/pipedream/api.ts`
 
 **Files:**
+
 - Create: `src/pipedream/api.ts`
 - Create: `src/pipedream/api.test.ts`
 
@@ -454,6 +461,7 @@ git commit -m "feat(pipedream): low-level REST API calls (token + connect-token)
 ## Task 4: Bearer token cache
 
 **Files:**
+
 - Create: `src/pipedream/token-cache.ts`
 - Create: `src/pipedream/token-cache.test.ts`
 
@@ -589,6 +597,7 @@ git commit -m "feat(pipedream): module-level bearer access_token cache"
 ## Task 5: Pipedream module index
 
 **Files:**
+
 - Create: `src/pipedream/index.ts`
 
 Re-exports for clean consumer imports.
@@ -619,6 +628,7 @@ git commit -m "feat(pipedream): module barrel"
 ## Task 6: Hono routes — token / account / accounts
 
 **Files:**
+
 - Modify: `src/server.ts`
 - Modify: `src/server.ts` (same file, different test) OR `tests/pipedream-routes.test.ts`
 - Create: `tests/pipedream-routes.test.ts`
@@ -808,6 +818,7 @@ git commit -m "feat(pipedream): HTTP routes for token mint + account persist + l
 ## Task 7: Frontend — install `@pipedream/sdk`
 
 **Files:**
+
 - Modify: `package.json` (implicit via `npm install`)
 - Modify: `package-lock.json` (implicit)
 
@@ -833,6 +844,7 @@ git commit -m "feat(pipedream): install @pipedream/sdk for frontend"
 ## Task 8: `useConnections` hook
 
 **Files:**
+
 - Create: `src/ui/useConnections.ts`
 
 **Context:** Mirrors the pattern of `src/ui/useSyncsSummary.ts`. Fetches `/api/user/:userId/pipedream/accounts`, refetches on `syncChangeTick` changes (so when a new connection is persisted, the UI updates).
@@ -895,11 +907,13 @@ git commit -m "feat(pipedream): useConnections hook"
 ## Task 9: `ConnectionsPanel` component
 
 **Files:**
+
 - Create: `src/ui/ConnectionsPanel.tsx`
 
 **Context:** Visual surface. Lists the user's connected apps + an "Add connection" button that opens the Pipedream SDK popup. Follows the Kumo design system used elsewhere in the app (see `src/ui/SyncPanel.tsx` for reference).
 
 The SDK flow:
+
 1. Component calls our backend `/api/user/:userId/pipedream/token` to mint a token.
 2. Initialize `PipedreamClient` (frontend SDK) with `{externalUserId, tokenCallback: () => token, projectEnvironment: "development"}`.
 3. Call `client.connectAccount({app: "github" | ..., onSuccess, onError})`.
@@ -1060,6 +1074,7 @@ git commit -m "feat(pipedream): ConnectionsPanel UI component"
 ## Task 10: Mount `ConnectionsPanel` inside the sidebar
 
 **Files:**
+
 - Modify: `src/app.tsx` (or `src/ui/SyncPanel.tsx` depending on layout)
 
 **Context:** The panel needs to render below the existing syncs list in the left sidebar.
@@ -1104,6 +1119,7 @@ git commit -m "feat(pipedream): mount ConnectionsPanel in sidebar"
 ## Task 11: Manual smoke test end-to-end locally
 
 **Files:**
+
 - None (manual verification)
 
 - [ ] **Step 1: Start dev server with .dev.vars loaded**
@@ -1144,6 +1160,7 @@ No CI will fire (deploy.yml is main-only; sanity-check.yml fires on push to main
 ## Self-Review Checklist
 
 **1. Spec coverage:**
+
 - ✅ Per-user OAuth/connection flow (Task 11 manual test proves the loop).
 - ✅ Connection persistence scoped to supervisor user (Task 2 + 6).
 - ✅ Access-token caching (Task 4).
@@ -1151,10 +1168,12 @@ No CI will fire (deploy.yml is main-only; sanity-check.yml fires on push to main
 - ✅ Integration points for Phase B (HttpGateway) are the `connected_accounts` rows + the cached bearer token.
 
 **2. Placeholder scan:**
+
 - Task 10 Step 2 says "adapt to actual file" — this is intentional because I don't know whether `ConnectionsPanel` should mount in `src/app.tsx` or `src/ui/SyncPanel.tsx`. The implementer should grep for "SyncPanel" use site. Not a placeholder in the sense of "TBD" — it's explicit instruction to read the file.
 - Task 9 Step 1 flags `@pipedream/sdk/browser` as a guess pending `ls node_modules` check — that's honest, not a placeholder.
 
 **3. Type consistency:**
+
 - `ConnectedAccount` defined in Task 1, consumed in Task 2 (tests + impl), Task 6 (server.ts list method), Task 8 (hook return shape).
 - `AccessTokenResult` / `ConnectTokenResult` defined in Task 3, consumed in Task 4 (cache) and Task 6 (route handler).
 - `ConnectionSummary` in Task 8 structurally matches `ConnectedAccount` — same field names. No drift.
