@@ -10,6 +10,11 @@ vi.mock("cloudflare:workers", async (importActual) => {
       HttpGateway: (opts: { props: unknown }) => ({
         __mockHttpGateway: true,
         props: opts.props
+      }),
+      LLMGateway: (opts: { props: unknown }) => ({
+        __mockLLMGateway: true,
+        props: opts.props,
+        runAgent: () => {}
       })
     }
   };
@@ -19,7 +24,7 @@ import { buildFacetWorkerCode } from "./bundle";
 import { FACET_WRAPPER_SOURCE } from "./wrapper";
 
 describe("buildFacetWorkerCode", () => {
-  it("produces a WorkerCode with three modules and mainModule=main.js", () => {
+  it("produces a WorkerCode with four modules and mainModule=main.js", () => {
     const code = buildFacetWorkerCode({
       schemaDdl: "CREATE TABLE issues (id TEXT PRIMARY KEY);",
       handlerCode: "export async function handleWebhook() {}",
@@ -28,6 +33,7 @@ describe("buildFacetWorkerCode", () => {
 
     expect(code.mainModule).toBe("main.js");
     expect(Object.keys(code.modules).sort()).toEqual([
+      "agent.js",
       "handler.js",
       "main.js",
       "schema.js"
@@ -87,5 +93,33 @@ describe("buildFacetWorkerCode", () => {
     expect(main).toMatch(/#ensureSchema/);
     expect(main).toMatch(/async __query\(/);
     expect(main).toMatch(/async __sqlExec\(/);
+  });
+});
+
+describe("buildFacetWorkerCode — agent primitive", () => {
+  it("includes agent.js alongside handler.js and schema.js", () => {
+    const bundle = buildFacetWorkerCode({
+      schemaDdl: "CREATE TABLE t (id INTEGER);",
+      handlerCode:
+        "export async function handleWebhook() { return new Response('ok'); }",
+      userId: "u-123"
+    });
+    expect(Object.keys(bundle.modules).sort()).toEqual([
+      "agent.js",
+      "handler.js",
+      "main.js",
+      "schema.js"
+    ]);
+    expect(bundle.modules["agent.js"]).toContain("export function createAgent");
+  });
+
+  it("passes the LLM binding in env so agent() can reach LLMGateway", () => {
+    const bundle = buildFacetWorkerCode({
+      schemaDdl: "",
+      handlerCode: "",
+      userId: "u-123"
+    });
+    expect(bundle.env).toBeDefined();
+    expect(bundle.env.LLM).toBeDefined();
   });
 });
