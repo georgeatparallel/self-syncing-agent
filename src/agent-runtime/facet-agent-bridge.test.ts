@@ -2,18 +2,27 @@ import { describe, it, expect, vi } from "vitest";
 import { FacetAgentBridge } from "./facet-agent-bridge";
 
 describe("FacetAgentBridge", () => {
-  it("sqlQuery delegates to sql.exec().toArray()", async () => {
-    const toArray = vi.fn().mockReturnValue([{ id: 1 }]);
-    const exec = vi.fn().mockReturnValue({ toArray });
+  it("sqlExec returns rows, rowsWritten, rowsRead on SELECT success", async () => {
+    const cursor = {
+      toArray: vi.fn().mockReturnValue([{ id: 1, name: "a" }]),
+      rowsWritten: 0,
+      rowsRead: 1
+    };
+    const exec = vi.fn().mockReturnValue(cursor);
     const sql = { exec } as unknown as SqlStorage;
 
     const bridge = new FacetAgentBridge({ sql, userId: "u" });
-    const rows = await bridge.sqlQuery("SELECT 1");
-    expect(rows).toEqual([{ id: 1 }]);
-    expect(exec).toHaveBeenCalledWith("SELECT 1");
+    const result = await bridge.sqlExec("SELECT * FROM t");
+    expect(result).toEqual({
+      ok: true,
+      rows: [{ id: 1, name: "a" }],
+      rowsWritten: 0,
+      rowsRead: 1
+    });
+    expect(exec).toHaveBeenCalledWith("SELECT * FROM t");
   });
 
-  it("sqlExec delegates with bindings and returns rowsWritten", async () => {
+  it("sqlExec returns empty rows + rowsWritten on INSERT success", async () => {
     const cursor = {
       toArray: vi.fn().mockReturnValue([]),
       rowsWritten: 2,
@@ -24,7 +33,12 @@ describe("FacetAgentBridge", () => {
 
     const bridge = new FacetAgentBridge({ sql, userId: "u" });
     const result = await bridge.sqlExec("INSERT INTO t VALUES (?)", 1);
-    expect(result).toEqual({ ok: true, rowsWritten: 2, rowsRead: 0 });
+    expect(result).toEqual({
+      ok: true,
+      rows: [],
+      rowsWritten: 2,
+      rowsRead: 0
+    });
     expect(exec).toHaveBeenCalledWith("INSERT INTO t VALUES (?)", 1);
   });
 

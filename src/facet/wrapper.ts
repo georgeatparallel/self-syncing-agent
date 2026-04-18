@@ -47,14 +47,11 @@ class FacetAgentBridge extends RpcTarget {
     this.#sql = deps.sql;
     this.#userId = deps.userId;
   }
-  async sqlQuery(query) {
-    return this.#sql.exec(query).toArray();
-  }
   async sqlExec(query, ...bindings) {
     try {
       const cursor = this.#sql.exec(query, ...bindings);
-      cursor.toArray();
-      return { ok: true, rowsWritten: cursor.rowsWritten, rowsRead: cursor.rowsRead };
+      const rows = cursor.toArray();
+      return { ok: true, rows, rowsWritten: cursor.rowsWritten, rowsRead: cursor.rowsRead };
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }

@@ -15,6 +15,12 @@ interface BridgeDeps {
  * handleGatewayRequest (same policy, no facet bounce), exec via
  * env.LOADER. userId is carried so the supervisor can stamp exec
  * isolates and fetch-policy calls with the right principal.
+ *
+ * sqlExec materializes the cursor and returns BOTH rows and stats —
+ * that way a SELECT invoked by the sub-agent's `sql` tool doesn't
+ * silently drop its result set. ExecFacetShim (see llm-gateway.ts)
+ * projects the rich shape back down to the documented __query/__sqlExec
+ * contracts that agent-authored runInSync code expects.
  */
 export class FacetAgentBridge extends RpcTarget {
   #sql: SqlStorage;
@@ -26,22 +32,19 @@ export class FacetAgentBridge extends RpcTarget {
     this.#userId = deps.userId;
   }
 
-  async sqlQuery(query: string): Promise<unknown[]> {
-    return this.#sql.exec(query).toArray();
-  }
-
   async sqlExec(
     query: string,
     ...bindings: unknown[]
   ): Promise<
-    | { ok: true; rowsWritten: number; rowsRead: number }
+    | { ok: true; rows: unknown[]; rowsWritten: number; rowsRead: number }
     | { ok: false; error: string }
   > {
     try {
       const cursor = this.#sql.exec(query, ...bindings);
-      cursor.toArray();
+      const rows = cursor.toArray();
       return {
         ok: true,
+        rows,
         rowsWritten: cursor.rowsWritten,
         rowsRead: cursor.rowsRead
       };

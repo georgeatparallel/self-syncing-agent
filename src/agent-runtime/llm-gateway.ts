@@ -33,20 +33,25 @@ class ExecFacetShim extends RpcTarget {
     this.#bridge = bridge;
   }
 
+  // Projects FacetAgentBridge.sqlExec's rich return down to the
+  // documented __query contract: `{ ok: true, rows } | { ok: false, error }`.
   async __query(sql: string) {
-    try {
-      const rows = await this.#bridge.sqlQuery(sql);
-      return { ok: true as const, rows };
-    } catch (e) {
-      return {
-        ok: false as const,
-        error: e instanceof Error ? e.message : String(e)
-      };
-    }
+    const r = await this.#bridge.sqlExec(sql);
+    if (!r.ok) return { ok: false as const, error: r.error };
+    return { ok: true as const, rows: r.rows };
   }
 
+  // Same for __sqlExec: the agent-authored runInSync contract returns
+  // `{ ok: true, rowsWritten, rowsRead } | { ok: false, error }`, so we
+  // strip `rows` here to keep that contract exact.
   async __sqlExec(sql: string, ...bindings: unknown[]) {
-    return this.#bridge.sqlExec(sql, ...bindings);
+    const r = await this.#bridge.sqlExec(sql, ...bindings);
+    if (!r.ok) return { ok: false as const, error: r.error };
+    return {
+      ok: true as const,
+      rowsWritten: r.rowsWritten,
+      rowsRead: r.rowsRead
+    };
   }
 }
 
@@ -72,8 +77,17 @@ export async function runAgent(
 
   const tools = {
     sql: tool({
-      description:
-        "Run a SQL statement against the facet's SQLite. Use for reads (SELECT) and writes (INSERT/UPDATE/DELETE/DDL).",
+      description: `Run a SQL statement against the facet's own SQLite.
+
+Use for reads (SELECT) and writes (INSERT/UPDATE/DELETE/DDL). Bindings are applied positionally ('?' placeholders). The facet's schema was established at sync creation; inspect via \`SELECT sql FROM sqlite_master\` if you need the current shape.
+
+Returns on success:
+  { ok: true, rows, rowsWritten, rowsRead }
+- \`rows\` is an array of result-row objects for SELECT; empty array for writes/DDL.
+- \`rowsWritten\` and \`rowsRead\` are SQLite's cursor stats for the statement.
+
+Returns on SQLite error:
+  { ok: false, error }`,
       inputSchema: z.object({
         query: z.string(),
         bindings: z.array(z.unknown()).optional()
@@ -103,8 +117,26 @@ export async function runAgent(
       }
     }),
     exec: tool({
-      description:
-        "Execute a JavaScript module that exports `async function runInSync(facet, fetch)`. Runs in a fresh Worker Loader isolate. Same contract as the run_in_sync tool.",
+      description: `Execute a JavaScript module in a fresh Worker Loader isolate. Use for compute the \`sql\` and \`fetch\` tools can't express: parsing complex payloads, computing diffs, chaining multi-step transformations, anything Turing-complete.
+
+Module contract: ES module source that MUST export \`async function runInSync(facet, fetch)\`. The isolate imports that export and calls it with two capabilities:
+
+\`facet\` — RPC surface into the sync's SQLite:
+- \`await facet.__query(sql)\` → \`{ ok: true, rows } | { ok: false, error }\`. Read-only: executes the statement and returns all result rows.
+- \`await facet.__sqlExec(sql, ...bindings)\` → \`{ ok: true, rowsWritten, rowsRead } | { ok: false, error }\`. Arbitrary SQL (INSERT / UPDATE / DELETE / DDL); rows are not returned — use \`__query\` for reads.
+
+\`fetch\` — global fetch in the exec isolate. Routes through the same auth-injecting proxy the handler and \`fetch\` tool use: upstream token is injected automatically for known hosts (currently \`api.linear.app\`); unknown hosts return 403.
+
+Limits and conventions:
+- Do NOT \`import\` anything beyond these two parameters. Runtime globals \`crypto\`, \`Response\`, etc. are available but npm packages are not.
+- Whatever \`runInSync\` returns becomes the tool's \`result\`. Keep it small — it flows back into this conversation's context.
+- \`console.log / .info / .warn / .error\` are captured (ring buffer: last 200 entries, 2KB per message) and returned alongside the result on both success and failure. Log before and after each fetch/__sqlExec boundary so a failing run is debuggable from the return alone.
+- Writes must be idempotent (INSERT OR REPLACE, ON CONFLICT) — the tool may be retried by the ReAct loop.
+
+Returns:
+- \`{ ok: true, result, logs }\` — module ran, \`result\` is whatever runInSync returned.
+- \`{ ok: false, error: "exec_failed", detail, stack?, logs }\` — runInSync threw.
+- \`{ ok: false, error: "no_export", detail, logs }\` — module didn't export \`runInSync\`.`,
       inputSchema: z.object({ code: z.string() }),
       execute: async ({ code }) => {
         const { buildExecWorkerCode } = await import("../execrunner/bundle");
