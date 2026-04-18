@@ -1,6 +1,10 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { callable, routeAgentRequest } from "agents";
-import { AIChatAgent, type OnChatMessageOptions } from "@cloudflare/ai-chat";
+import {
+  AIChatAgent,
+  type OnChatMessageOptions,
+  type ChatResponseResult
+} from "@cloudflare/ai-chat";
 import { convertToModelMessages, stepCountIs, streamText } from "ai";
 import { Hono } from "hono";
 import { applySchemaMigrations } from "./db/schema";
@@ -18,6 +22,13 @@ const MODEL_ID = "claude-opus-4-7";
 
 export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
   maxPersistedMessages = 100;
+
+  /**
+   * Default state for new/fresh DO instances. The Agents SDK's state
+   * getter returns this when no state has been persisted yet, which
+   * removes the need for null-fallbacks in every setState writer.
+   */
+  initialState = { syncChangeTick: 0 };
 
   /**
    * Re-declare `env` as public so tool factories can reach bindings
@@ -52,8 +63,10 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
    * the client collapses consecutive updates via React's dep array.
    */
   #bumpChangeTick() {
-    const prev = this.state?.syncChangeTick ?? 0;
-    this.setState({ ...(this.state ?? {}), syncChangeTick: prev + 1 });
+    this.setState({
+      ...this.state,
+      syncChangeTick: this.state.syncChangeTick + 1
+    });
   }
 
   onStart() {
@@ -149,9 +162,11 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
       });
       return { status: 500, body: "handler failed" };
     } finally {
-      // Signal to the client that something changed. Fires on 2xx (row
-      // written), 5xx (error logged), and throw (error logged) — any
-      // of which could affect what the sidebar should display.
+      // Fires on 2xx (row written), 5xx (error logged), and throw (error
+      // logged). Intentionally skipped for signature-invalid (401) and
+      // sync-not-found (404) early returns above — those paths neither
+      // mutate state nor log an error, so there's nothing new for the
+      // sidebar to display.
       this.#bumpChangeTick();
     }
   }
@@ -290,6 +305,18 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
     await this.removeMcpServer(serverId);
   }
 
+  /**
+   * Fires on every turn-completion path: normal completion, abort, and
+   * errors — strictly broader than streamText's onFinish callback, which
+   * doesn't fire on client-initiated abort. We use this as the signal
+   * source for the ops panel because an aborted turn may still have
+   * completed tool calls that mutated supervisor or facet state before
+   * the abort landed; the sidebar should refetch regardless of outcome.
+   */
+  protected onChatResponse(_result: ChatResponseResult) {
+    this.#bumpChangeTick();
+  }
+
   async onChatMessage(_onFinish: unknown, options?: OnChatMessageOptions) {
     const anthropic = createAnthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
     const sql = this.sql.bind(this);
@@ -316,14 +343,7 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
         ...buildTools(this)
       },
       stopWhen: stepCountIs(5),
-      abortSignal: options?.abortSignal,
-      onFinish: () => {
-        // Signal panel clients to refetch after every completed turn —
-        // any tool call that wrote to the supervisor or facet is captured
-        // by this tick. The AI SDK's onFinish fires after the full stream
-        // (including tool-call results) has been consumed.
-        this.#bumpChangeTick();
-      }
+      abortSignal: options?.abortSignal
     });
 
     return result.toUIMessageStreamResponse();
