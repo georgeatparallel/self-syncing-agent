@@ -14,9 +14,9 @@ describe("EXEC_WRAPPER_SOURCE", () => {
     );
   });
 
-  it("exports a named class ExecRunner extending WorkerEntrypoint with an async run(facet) method", () => {
+  it("default-exports a class ExecRunner extending WorkerEntrypoint with an async run(facet) method", () => {
     expect(EXEC_WRAPPER_SOURCE).toMatch(
-      /export class ExecRunner extends WorkerEntrypoint/
+      /export default class ExecRunner extends WorkerEntrypoint/
     );
     expect(EXEC_WRAPPER_SOURCE).toMatch(/async run\(facet\)/);
   });

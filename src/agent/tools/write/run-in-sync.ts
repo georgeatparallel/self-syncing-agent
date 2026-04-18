@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getSyncById } from "../../../db/syncs";
 import { attachFacet } from "../../../facet/loader";
 import { buildExecWorkerCode } from "../../../execrunner/bundle";
+import { FacetBridge } from "../../../execrunner/facet-bridge";
 import type { ChatAgent } from "../../../server";
 
 interface LogEntry {
@@ -38,7 +39,7 @@ interface ExecRunner {
 }
 
 interface ExecWorkerStub {
-  getEntrypoint(name: string): ExecRunner;
+  getEntrypoint(): ExecRunner;
 }
 
 // 64KB of serialized JSON. Sized for realistic backfill summaries; past
@@ -74,15 +75,21 @@ export function runInSyncTool(agent: ChatAgent) {
           load: (c: unknown) => ExecWorkerStub;
         }
       ).load(buildExecWorkerCode({ code, userId: agent.name }));
-      const entrypoint = workerStub.getEntrypoint("ExecRunner");
+      const entrypoint = workerStub.getEntrypoint();
 
-      // The facet stub is passed AS AN RPC ARGUMENT to entrypoint.run(...).
-      // Capability-based RPC allows stubs to cross isolate boundaries;
-      // the exec code reaches SQLite via facet.__query / facet.__sqlExec.
+      // We can't pass the raw facet DO stub as an RPC arg — workerd
+      // can't marshal DurableObject stubs across Worker Loader isolate
+      // boundaries (produces an opaque "internal error; reference = ..."
+      // before the method body runs). The canonical fix from Cloudflare's
+      // codemode example: wrap the stub in an RpcTarget subclass, which
+      // IS crossable. FacetBridge mirrors __query / __sqlExec so the
+      // agent's code sees the same interface it would see talking to
+      // the facet directly.
       const facet = attachFacet(agent.env, agent.ctx.facets, sync, agent.name);
+      const bridge = new FacetBridge(facet);
 
       try {
-        const res = await entrypoint.run(facet);
+        const res = await entrypoint.run(bridge);
 
         if (!res.ok) return res;
 
