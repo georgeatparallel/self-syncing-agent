@@ -407,7 +407,7 @@ describe("update_sync", () => {
     });
   });
 
-  it("facet_load_failed: rollback restores DB to v1 and re-attaches old facet when ping throws", async () => {
+  it("facet_load_failed: rollback aborts broken bundle + restores DB + re-attaches v1 + pings", async () => {
     const stub = env.ChatAgent.get(env.ChatAgent.idFromName("u-rollback"));
     await runInDurableObject(stub, async (instance) => {
       await (
@@ -415,18 +415,19 @@ describe("update_sync", () => {
       ).setName("u-rollback");
       const seeded = seedSync(instance);
 
-      // The fake returns a stub whose ping fails ONLY on the v2 attach,
-      // succeeds on the v1 re-attach during rollback. We distinguish by
-      // looking at the most recently persisted code_id at the moment the
-      // cb runs — crude but effective in a single-threaded test.
+      // Collect observable side effects in order.
+      const aborts: string[] = [];
       const attachedCodeIds: string[] = [];
-      let callCount = 0;
+      const pings: string[] = [];
       const restoreFacets = installFakeFacets(instance, {
         get(_name, cb) {
-          callCount += 1;
-          // Run the cb so the build path is exercised (same pattern as
-          // other tests). Swallow failures because workerd test runtime
-          // can't realize the DO class.
+          // Real runtime skips the callback for an already-registered
+          // facet, but our fake doesn't model that caching — it just
+          // reads the current DB row each call so we can distinguish
+          // v2-phase stubs (ping throws) from v1-phase stubs (ping
+          // succeeds). The real behaviour we're locking in is the
+          // ORDER of calls: attach(v2) → ping(v2) throws → abort →
+          // attach(v1) → ping(v1) OK.
           void Promise.resolve(cb()).catch(() => {});
           const sql = (instance as { sql: SqlTag }).sql.bind(
             instance
@@ -442,14 +443,16 @@ describe("update_sync", () => {
               rowsRead: 0
             }),
             __supervisorPing: async () => {
+              pings.push(current?.code_id ?? "unknown");
               if (isV2) {
                 throw new Error("compilation error: SyntaxError in handler.js");
               }
-              // v1 rollback ping succeeds
             }
           };
         },
-        abort: () => {},
+        abort: (name) => {
+          aborts.push(name);
+        },
         delete: () => {}
       });
 
@@ -470,15 +473,23 @@ describe("update_sync", () => {
           detail: expect.stringMatching(/SyntaxError/)
         });
 
-        // Rollback asserted: DB restored to v1 shape.
+        // DB restored to v1.
         const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
         const persisted = getSyncById(sql, seeded.id)!;
         expect(persisted.version).toBe(1);
         expect(persisted.code_id).toBe(`sync:${seeded.id}:v1`);
         expect(persisted.handler_code).toBe(seeded.handler_code);
-        // `get(name, cb)` was called at least twice: v2 attach (failed)
-        // + v1 rollback re-attach.
-        expect(callCount).toBeGreaterThanOrEqual(2);
+
+        // Two aborts fired: one from the normal swap (v1 → v2 attempt),
+        // one from the rollback (invalidating the broken v2 binding so
+        // the subsequent v1 re-attach can install v1 as the active class).
+        expect(aborts).toEqual([seeded.name, seeded.name]);
+
+        // Last attach was for v1 (post-rollback re-attach).
+        expect(attachedCodeIds.at(-1)).toBe(`sync:${seeded.id}:v1`);
+
+        // Last ping was v1 and succeeded (ping didn't throw for v1-phase).
+        expect(pings.at(-1)).toBe(`sync:${seeded.id}:v1`);
       } finally {
         restoreFacets();
       }

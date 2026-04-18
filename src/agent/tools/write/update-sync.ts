@@ -161,9 +161,25 @@ export function updateSyncTool(agent: ChatAgent) {
         );
         await (newFacet as unknown as FacetRpcSurface).__supervisorPing();
       } catch (e) {
-        // Rollback: restore the DB row to v1, re-attach with the old code_id
-        // so the sync is live again on its previous version. Next webhook
-        // finds the v1 facet running as before.
+        // Rollback. Four ordered steps — each best-effort but they fire
+        // in this order so the observable state transitions correctly:
+        //
+        // 1. Restore DB row to v1 FIRST so any concurrent webhook
+        //    delivery sees v1 code_id and would attempt to attach v1.
+        // 2. Abort the failed-v2 facet. Critical — `ctx.facets.get(name,
+        //    cb)` skips the callback for a facet that's already
+        //    registered under a class. Without this abort, step 3's
+        //    attachFacet returns a stub still pointing to the broken v2
+        //    bundle (diagnosed in a live smoke test where webhook
+        //    deliveries kept hitting the bad handler after rollback
+        //    "succeeded"). `abort()` invalidates the name↔class binding
+        //    so the subsequent `get(name, cb)` fires the callback fresh.
+        // 3. Re-attach with the old sync — the cb now runs, returns the
+        //    v1 class; Worker Loader's cache still has v1 compiled from
+        //    earlier so this is fast.
+        // 4. Ping to force the compile path (if Worker Loader happened
+        //    to have evicted v1). Tolerated — if this also fails, the
+        //    next webhook delivery will retry attach on its own.
         updateSync(sql, sync_id, {
           handler_code: oldSync.handler_code,
           schema_ddl: oldSync.schema_ddl,
@@ -171,11 +187,24 @@ export function updateSyncTool(agent: ChatAgent) {
           code_id: oldSync.code_id
         });
         try {
-          attachFacet(agent.env, agent.ctx.facets, oldSync, agent.name);
+          agent.ctx.facets.abort(
+            oldSync.name,
+            new Error("update_sync: invalidating failed bundle")
+          );
         } catch {
-          // Best-effort re-attach. If this also fails, the next webhook
-          // delivery will retry via handleWebhookDelivery -> attachFacet.
-          // The DB is already restored to v1, which is what matters.
+          // Tolerate any abort error during rollback — best-effort.
+        }
+        try {
+          const restored = attachFacet(
+            agent.env,
+            agent.ctx.facets,
+            oldSync,
+            agent.name
+          );
+          await (restored as unknown as FacetRpcSurface).__supervisorPing();
+        } catch {
+          // Best-effort. If this fails, the DB is already v1 and the
+          // next webhook delivery's handleWebhookDelivery will retry.
         }
         return {
           ok: false as const,
