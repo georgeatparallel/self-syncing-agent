@@ -371,6 +371,23 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
     return listConnectedAccounts(this.sql.bind(this), userId);
   }
 
+  /**
+   * Resolve a single app's connected account_id for this user, or null if
+   * the user hasn't linked that app. Supervisor-SQLite-only; no facet
+   * attach. Same direct-RPC hydration pattern as siblings — setName first,
+   * then ensure schema.
+   */
+  async getConnectedAccountId(
+    userId: string,
+    appSlug: string
+  ): Promise<string | null> {
+    await this.setName(userId);
+    this.#ensureSchema();
+    const rows = listConnectedAccounts(this.sql.bind(this), userId);
+    const found = rows.find((r) => r.app_slug === appSlug);
+    return found ? found.account_id : null;
+  }
+
   @callable()
   async addServer(name: string, url: string) {
     return await this.addMcpServer(name, url);
