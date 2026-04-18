@@ -8,6 +8,7 @@ import {
 import { useConnections, type ConnectionSummary } from "./useConnections";
 
 const APP_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: "linear", label: "Linear" },
   { value: "github", label: "GitHub" },
   { value: "slack", label: "Slack" },
   { value: "notion", label: "Notion" },
