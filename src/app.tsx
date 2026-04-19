@@ -1,6 +1,5 @@
 import { Suspense, useCallback, useState, useEffect, useRef } from "react";
 import { useAgent } from "agents/react";
-import { getOrMintUserId, userIdFromPath, userPath } from "./identity";
 import { SyncPanel } from "./ui/SyncPanel";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
@@ -222,7 +221,15 @@ function ToolPartView({
 
 // ── Main chat ─────────────────────────────────────────────────────────
 
-function Chat() {
+interface ChatProps {
+  userId: string;
+  // Reserved for a future header/identity badge. Currently unused; kept
+  // on the props boundary so the auth probe's full payload flows through
+  // one consistent API rather than being dropped at the shell.
+  email?: string;
+}
+
+function Chat({ userId }: ChatProps) {
   const [connected, setConnected] = useState(false);
   const [input, setInput] = useState("");
   const [showDebug, setShowDebug] = useState(false);
@@ -243,21 +250,6 @@ function Chat() {
   const [mcpUrl, setMcpUrl] = useState("");
   const [isAddingServer, setIsAddingServer] = useState(false);
   const mcpPanelRef = useRef<HTMLDivElement>(null);
-
-  // Resolve the userId exactly once per mount. If we're at /, redirect to /user/<id>
-  // so the URL is shareable. useState with a lazy initializer ensures this runs
-  // once (before useAgent sees it) and stays stable across re-renders.
-  const [userId] = useState(() => {
-    // URL wins when present — shared /user/<other> links render the shared
-    // agent for the session WITHOUT mutating this visitor's own persisted
-    // identity. Otherwise fall back to the visitor's own minted/stored ID.
-    const fromUrl = userIdFromPath(window.location.pathname);
-    const resolved = fromUrl ?? getOrMintUserId();
-    if (window.location.pathname !== userPath(resolved)) {
-      window.history.replaceState({}, "", userPath(resolved));
-    }
-    return resolved;
-  });
 
   // Server-pushed change-tick. The Agents SDK's onStateUpdate callback
   // is the canonical subscription path — fires on every CF_AGENT_STATE
@@ -982,7 +974,65 @@ function Chat() {
   );
 }
 
+type AuthMe = { userId: string; email: string };
+
+/**
+ * Bootstraps session identity from the Cloudflare-Access-verified JWT via
+ * `/api/auth/me`. This is the ONLY source of userId for the UI — any
+ * client-side minting would 403 at the route middleware (which checks
+ * path-userId === authenticated sub). Render is suspended until the probe
+ * resolves so every child sees a stable, authenticated userId.
+ */
 export default function App() {
+  const [auth, setAuth] = useState<AuthMe | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // StrictMode double-invokes effects in dev; the cancel flag prevents
+    // a stale first-mount response from clobbering state after remount.
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/me");
+        if (!res.ok) {
+          throw new Error(`auth probe failed: ${res.status}`);
+        }
+        const body = (await res.json()) as AuthMe;
+        if (!cancelled) setAuth(body);
+      } catch (e) {
+        if (!cancelled) {
+          setAuthError(e instanceof Error ? e.message : String(e));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (authError) {
+    // Production: /api/auth/me should always 200 because Cloudflare Access
+    // is the only ingress. A failure here means Access is misconfigured.
+    // Local dev: DEV_FALLBACK_USER is missing from .dev.vars.
+    return (
+      <Toasty>
+        <div className="flex items-center justify-center h-screen text-kumo-danger p-4">
+          Auth probe failed: {authError}
+        </div>
+      </Toasty>
+    );
+  }
+
+  if (auth === null) {
+    return (
+      <Toasty>
+        <div className="flex items-center justify-center h-screen text-kumo-inactive">
+          Loading...
+        </div>
+      </Toasty>
+    );
+  }
+
   return (
     <Toasty>
       <Suspense
@@ -992,7 +1042,7 @@ export default function App() {
           </div>
         }
       >
-        <Chat />
+        <Chat userId={auth.userId} email={auth.email} />
       </Suspense>
     </Toasty>
   );
