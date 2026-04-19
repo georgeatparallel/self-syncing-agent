@@ -12,6 +12,13 @@ vi.mock("../src/pipedream", () => ({
   })
 }));
 
+// The /api/user/:userId/* routes are wrapped with requireAuthAndUserIdMatch
+// (Phase F, Task 1). Every SELF.fetch below has to carry the Access header
+// matching the path :userId, or the request 401s/403s before hitting the
+// handler. Using the same UUID for both sides of the match satisfies the
+// middleware's case-insensitive equality check.
+const CF_ACCESS_HEADER = "cf-access-authenticated-user-email";
+
 describe("Pipedream HTTP routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -21,7 +28,7 @@ describe("Pipedream HTTP routes", () => {
     const userId = crypto.randomUUID();
     const res = await SELF.fetch(
       `https://test/api/user/${userId}/pipedream/token`,
-      { method: "POST" }
+      { method: "POST", headers: { [CF_ACCESS_HEADER]: userId } }
     );
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -38,7 +45,10 @@ describe("Pipedream HTTP routes", () => {
       `https://test/api/user/${userId}/pipedream/account`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          [CF_ACCESS_HEADER]: userId
+        },
         body: JSON.stringify({
           app_slug: "github",
           account_id: "apn_gh"
@@ -55,7 +65,10 @@ describe("Pipedream HTTP routes", () => {
       `https://test/api/user/${userId}/pipedream/account`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          [CF_ACCESS_HEADER]: userId
+        },
         body: JSON.stringify({ app_slug: "github" })
       }
     );
@@ -67,11 +80,15 @@ describe("Pipedream HTTP routes", () => {
     const userId = crypto.randomUUID();
     await SELF.fetch(`https://test/api/user/${userId}/pipedream/account`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        [CF_ACCESS_HEADER]: userId
+      },
       body: JSON.stringify({ app_slug: "slack", account_id: "apn_sl" })
     });
     const res = await SELF.fetch(
-      `https://test/api/user/${userId}/pipedream/accounts`
+      `https://test/api/user/${userId}/pipedream/accounts`,
+      { headers: { [CF_ACCESS_HEADER]: userId } }
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -92,7 +109,10 @@ describe("Pipedream HTTP routes", () => {
       `https://test/api/user/${userId}/pipedream/account`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          [CF_ACCESS_HEADER]: userId
+        },
         body: JSON.stringify({ app_slug: "github", account_id: "apn_gh_1" })
       }
     );
