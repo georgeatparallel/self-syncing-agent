@@ -56,4 +56,14 @@ export function applySchemaMigrations(sql: SqlTag): void {
       PRIMARY KEY (user_id, app_slug)
     )
   `;
+
+  // ALTER-TABLE migrations: each one must be idempotent. `onStart` reruns
+  // the whole migration script on every DO wake-up, so any `ADD COLUMN`
+  // that has already landed surfaces SQLite's "duplicate column" error —
+  // we swallow that specific failure and rethrow anything else.
+  try {
+    sql`ALTER TABLE syncs ADD COLUMN api_hosts TEXT NOT NULL DEFAULT '[]'`;
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e))) throw e;
+  }
 }
