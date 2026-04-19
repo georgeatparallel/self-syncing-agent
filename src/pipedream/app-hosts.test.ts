@@ -24,6 +24,14 @@ describe("isDeniedHost (SSRF)", () => {
       expect(isDeniedHost(h)).toBe(true)
     );
   });
+  it("blocks IPv4-mapped IPv6 (::ffff:a.b.c.d)", () => {
+    expect(isDeniedHost("::ffff:127.0.0.1")).toBe(true);
+    expect(isDeniedHost("::ffff:169.254.169.254")).toBe(true);
+    expect(isDeniedHost("::ffff:10.0.0.1")).toBe(true);
+  });
+  it("allows IPv4-mapped IPv6 to public hosts", () => {
+    expect(isDeniedHost("::ffff:8.8.8.8")).toBe(false);
+  });
   it("allows public hosts", () => {
     ["api.github.com", "8.8.8.8"].forEach((h) =>
       expect(isDeniedHost(h)).toBe(false)
