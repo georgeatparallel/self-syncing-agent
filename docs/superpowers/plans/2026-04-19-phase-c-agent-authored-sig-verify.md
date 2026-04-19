@@ -9,9 +9,13 @@
 - The facet wrapper (`FACET_WRAPPER_SOURCE`) gains one new RPC method: `__verifySignature(body, headers, secret) → boolean`. The method imports `handler.js` with `import * as` to pick up an optional `verifySignature` export, delegates to it if present, and returns `false` on any error or missing export (fail-closed).
 - The handler contract gains a new **required** second export: `async function verifySignature(body, headers, secret): Promise<boolean>`. `body` is a `Uint8Array` of the raw request body; `headers` is a `Record<string, string>` with lowercased keys; `secret` is the stored `webhook_secret`. Returning `false` (or throwing) means 401.
 - `handleWebhookDelivery` in `src/server.ts` stops calling `verifyLinearSignature`. New flow: attach facet first, call `facet.__verifySignature(body, headers, secret)`, 401 on false, else deliver the webhook. Attaching the facet before signature verification is intentional — the wrapper is tiny and Worker Loader caches the compiled module, so the cost of compiling-to-reject-invalid is a few ms once per facet lifetime.
+- **401s now log to `sync_errors` with a distinctive `error_message`.** Previously 401 was an early return that skipped both `logSyncError` and `#bumpChangeTick` (comment: "nothing new for the sidebar"). Post-Phase-C, a 401 almost certainly means the agent's `verifySignature` is buggy — the agent must be able to see the accumulation to diagnose. The trade-off: a scanner-spammed webhook URL fills `sync_errors`; acceptable for a single-user trial, would need a per-sync rate-limit in a multi-tenant prod posture. Rate limiting is out of scope for Phase C — flagged in Future Work.
 - The Hono `/webhook/:userId/:syncId` route stops cherry-picking the `linear-signature` header. It forwards ALL request headers (lowercased) to `handleWebhookDelivery`.
 - `src/webhook/hmac.ts` and its test file are deleted. The `verifyLinearSignature` import in `src/server.ts` is removed. One code path; zero per-integration supervisor code.
-- The `create_sync` and `update_sync` tool descriptions are updated to teach the LLM about the `verifySignature` export — with a concrete Linear HMAC-SHA256-hex example in the tool description (the most common scheme; the agent can web-search for GitHub/Slack/Stripe variants when needed).
+- The `create_sync` and `update_sync` tool descriptions are updated to teach the LLM about the `verifySignature` export — with a concrete Linear HMAC-SHA256-hex example in the tool description. The `create_sync` schema-authoring guidance is also extended to require a `created_at INTEGER NOT NULL` column on every agent-authored facet table, populated from `Date.now()` at insert. Rationale: this column is the facet-side timestamp the agent needs to run the 401-triage rubric (see below) — without it, the agent can't correlate ingestion timestamps against `sync_errors.occurred_at` to distinguish "verifier broken" from "scanner noise."
+- The `SYSTEM_PROMPT` is updated in two places:
+  1. The existing **probe loop's Phase 2 ("trigger")** is extended with a signature-verification sanity gate: after triggering a test event, check `get_sync_errors` before proceeding. If 401s appear, the agent-authored `verifySignature` is wrong — fix via `update_sync` and re-trigger. Only proceed to Phase 3 (read and refine) once the trigger produces a 2xx and a row lands. This is the PRIMARY place the agent exercises the signature check — catches verifier bugs at setup time, before the user ever notices.
+  2. A new section, **"Debugging a sync that was working and went silent,"** encodes the 401-triage decision procedure as a BACKUP rubric for the other scenario: a sync that was landing real data stops doing so. Check `get_sync_errors` for 401 counts + timestamps, cross-reference against the facet's own `created_at` column via `query_sync` for the same window, compare ratios. Fresh rows alongside 401s → scanner noise, ignore. Zero rows + many 401s → verifier broken → propose `update_sync`. Falls back to `syncs.updated_at` (always present, bumped only on 2xx) when the facet schema lacks a timestamp column.
 - Migration: the existing `linear-high-urgent-issues` sync's handler doesn't export `verifySignature` yet. After Phase C ships, the next real webhook returns 401 until the user asks the agent to `update_sync` with a new handler that includes the verifier. This is the intended migration path — the README will mention it.
 
 **Tech Stack:** Cloudflare Workers Durable Object Facets, Worker Loader (dynamic ES module bundles), Web Crypto (`crypto.subtle.sign` / `.verify`), Vitest with `@cloudflare/vitest-pool-workers` (facet runtime itself is faked via the existing `installFakeFacets` helper — facets don't run inside vitest-pool-workers yet).
@@ -28,10 +32,11 @@
 
 - `src/facet/wrapper.ts` — extend `FACET_WRAPPER_SOURCE` with `__verifySignature(body, headers, secret)` method and the `import * as handlerModule` line. Update top-of-file jsdoc to document the new required `verifySignature` export in the handler contract.
 - `src/facet/bundle.test.ts` — add a regex assertion that the wrapper source contains `async __verifySignature(`.
-- `src/server.ts` — `handleWebhookDelivery` signature changes: `signatureHex: string | null` → `headers: Record<string, string>`. Attach facet first, then call `facet.__verifySignature`. Remove `import { verifyLinearSignature } from "./webhook/hmac"`. Update the Hono `/webhook/:userId/:syncId` route to collect all headers and pass them through (no more `linear-signature` cherry-pick).
-- `tests/webhook-delivery.test.ts` — update every call site of `handleWebhookDelivery` from `(userId, syncId, body, sig)` to `(userId, syncId, body, headers)`. Add a `__verifySignature` method to the `FakeFacetStub` shape; each test provides an impl (HMAC-check for happy-path, `async () => false` for 401-path). Update the `POST /webhook/:userId/:syncId (end-to-end)` test — the fake facet's `__verifySignature` now does the real signature check.
-- `src/agent/tools/write/create-sync.ts` — tool description gains the `verifySignature` contract + a concrete Linear example. Mark the export as REQUIRED (fail-closed).
+- `src/server.ts` — `handleWebhookDelivery` signature changes: `signatureHex: string | null` → `headers: Record<string, string>`. Attach facet first, then call `facet.__verifySignature`. On false: call `logSyncError` with `error_message: "signature verification rejected by handler"` AND `#bumpChangeTick` (so the sidebar reflects the new error row) before returning 401. Remove `import { verifyLinearSignature } from "./webhook/hmac"`. Update the existing `finally`-block comment — 401 is no longer a "nothing new for the sidebar" path. Update the Hono `/webhook/:userId/:syncId` route to collect all headers and pass them through (no more `linear-signature` cherry-pick).
+- `tests/webhook-delivery.test.ts` — update every call site of `handleWebhookDelivery` from `(userId, syncId, body, sig)` to `(userId, syncId, body, headers)`. Add a `__verifySignature` method to the `FakeFacetStub` shape; each test provides an impl (HMAC-check for happy-path, `async () => false` for 401-path). The two bad-signature tests gain a new assertion: `listSyncErrors(sql, syncId, 10)` returns a row with `error_message: "signature verification rejected by handler"`. Update the `POST /webhook/:userId/:syncId (end-to-end)` test — the fake facet's `__verifySignature` now does the real signature check.
+- `src/agent/tools/write/create-sync.ts` — tool description gains the `verifySignature` contract + a concrete Linear example. Mark the export as REQUIRED (fail-closed). `schema_ddl` zod description extended to require a `created_at INTEGER NOT NULL` column on every table (debuggability requirement, not a cosmetic convention — the 401-triage rubric depends on it).
 - `src/agent/tools/write/update-sync.ts` — tool description cross-references create_sync's contract; reminds the agent that any `update_sync` that changes `handler_code` must still include `verifySignature`.
+- `src/agent/system-prompt.ts` — append a new section **"Debugging a sync that's silent"** encoding the 401-triage decision procedure. The agent reads the system prompt on every turn (prompt-cached), so this is the right place for reasoning that must fire proactively when the user says "my sync isn't working" — not only when a tool description prompts it.
 
 **Deleted files:**
 
@@ -296,36 +301,58 @@ async handleWebhookDelivery(
   bodyBytes: ArrayBuffer,
   headers: Record<string, string>
 ): Promise<{ status: number; body: string }> {
-  // ... (setName, ensureSchema, getSyncById unchanged)
+  await this.setName(userId);
+  this.#ensureSchema();
+  const sql = this.sql.bind(this);
+  const sync = getSyncById(sql, syncId);
+  if (!sync) return { status: 404, body: "sync not found" };
 
   const body = new Uint8Array(bodyBytes);
+
+  // Attach the facet before the signature check — verifySignature lives
+  // inside handler.js and needs the facet isolate running. Worker Loader
+  // caches the compiled bundle, so invalid-signature deliveries pay the
+  // compilation cost once per facet lifetime (cheap), not per delivery.
   const facet = attachFacet(this.env, this.ctx.facets, sync, userId);
 
-  // Signature verification is delegated to the handler's verifySignature
-  // export via the facet wrapper's __verifySignature RPC. Missing export
-  // or thrown error → false → 401. See src/facet/wrapper.ts for contract.
-  const verifyResult = await (
-    facet as unknown as {
-      __verifySignature(
-        body: Uint8Array,
-        headers: Record<string, string>,
-        secret: string
-      ): Promise<boolean>;
-    }
-  ).__verifySignature(body, headers, sync.webhook_secret);
-  if (!verifyResult) {
-    return { status: 401, body: "invalid signature" };
-  }
-
-  // (facetRequest build, facet.fetch, error-logging, touchSyncUpdatedAt,
-  //  bumpChangeTick — all unchanged from the current shape)
-  const facetRequest = new Request("https://facet.internal/webhook", {
-    method: "POST",
-    body: body,
-    headers: { "content-type": "application/json" }
-  });
-
   try {
+    // Signature verification is delegated to the handler's verifySignature
+    // export via the facet wrapper's __verifySignature RPC. Missing export
+    // or thrown error → false → 401. See src/facet/wrapper.ts for contract.
+    const verifyResult = await (
+      facet as unknown as {
+        __verifySignature(
+          body: Uint8Array,
+          headers: Record<string, string>,
+          secret: string
+        ): Promise<boolean>;
+      }
+    ).__verifySignature(body, headers, sync.webhook_secret);
+    if (!verifyResult) {
+      // Log the rejection so accumulated 401s are visible in sync_errors
+      // (with occurred_at timestamps) — the agent's 401-triage rubric in
+      // the system prompt relies on this. Pre-Phase-C, 401 was an early
+      // return that skipped logging ("nothing new for the sidebar"); that
+      // changes here because a 401 now almost certainly means the agent's
+      // verifySignature is buggy, which the agent must be able to see.
+      logSyncError(sql, {
+        sync_id: sync.id,
+        payload_preview: payloadPreview(body),
+        error_message: "signature verification rejected by handler",
+        stack_trace: null,
+        handler_version: sync.version
+      });
+      return { status: 401, body: "invalid signature" };
+    }
+
+    // Rebuild a minimal Request for the facet. Agent handlers read the
+    // body via request.json(); headers beyond content-type are not part
+    // of the documented handler contract.
+    const facetRequest = new Request("https://facet.internal/webhook", {
+      method: "POST",
+      body: body,
+      headers: { "content-type": "application/json" }
+    });
     const facetResponse = await facet.fetch(facetRequest);
     if (facetResponse.status >= 500) {
       logSyncError(sql, {
@@ -349,19 +376,17 @@ async handleWebhookDelivery(
     });
     return { status: 500, body: "handler failed" };
   } finally {
+    // Fires on every non-404 path now (2xx, 401, 5xx, throw) — all of
+    // which log something actionable (the 200 path bumps updated_at via
+    // touchSyncUpdatedAt; the 401/5xx/throw paths write a sync_errors
+    // row). 404 early-returns before the try, so it still skips the bump
+    // — nothing changed for that path and no row was touched.
     this.#bumpChangeTick();
   }
 }
 ```
 
-**Important ordering note:** the facet attach now happens before the signature check. This is a deliberate change. Rationale (worth adding as an inline comment):
-
-```ts
-// Attach the facet before the signature check — verifySignature lives
-// inside handler.js and needs the facet isolate running. Worker Loader
-// caches the compiled bundle, so invalid-signature deliveries pay the
-// compilation cost once per facet lifetime (cheap), not per delivery.
-```
+**Important structural change:** the 401 check now lives INSIDE the try block so the `finally` bump fires naturally — no separate manual `#bumpChangeTick()` call in the 401 branch. The 404 early-return still skips the bump because no DB state changed. The existing comment on the finally block needs the rewrite shown above to match this new truth table.
 
 ### Remove the import
 
@@ -505,6 +530,20 @@ Actually no — the existing "bad signature" tests already produce a bad HMAC (t
 
 **The 401-nosig test** (no `linear-signature` header) currently passes `null`. New shape: pass an empty headers object `{}`. `verifyLinearHmac` reads `headers["linear-signature"]`, sees `undefined`, returns `false` → 401. Exactly the same behavior.
 
+**New assertion for both bad-sig tests:** after expecting `res.status === 401`, also assert the sync_errors row was written:
+
+```ts
+const sql = (
+  instance as never as { sql: (...a: unknown[]) => unknown }
+).sql.bind(instance) as never;
+const errors = listSyncErrors(sql, syncId, 10);
+expect(errors).toHaveLength(1);
+expect(errors[0].error_message).toBe("signature verification rejected by handler");
+expect(errors[0].handler_version).toBe(1);
+```
+
+Import `listSyncErrors` at the top of the test file if it's not already (check existing imports — the facet-throws test at line 258 already uses it, so the import is there).
+
 **The e2e route test** (`POST /webhook/:userId/:syncId`) already sends headers via `SELF.fetch`, so the route change forwards them naturally. The fake facet in that test uses `verifyLinearHmac` and the bad-sig case (`sig: "ab".repeat(32)`) fails the HMAC → 401. Update:
 
 ```ts
@@ -548,14 +587,67 @@ git commit -m "feat(webhook): delegate signature verification to facet handler"
 
 ---
 
-## Task 3: Teach the agent about `verifySignature` via tool descriptions
+## Task 3: Teach the agent — system prompt, tool descriptions, and the `created_at` convention
 
 **Files:**
 
+- Modify: `src/agent/system-prompt.ts`
 - Modify: `src/agent/tools/write/create-sync.ts`
 - Modify: `src/agent/tools/write/update-sync.ts`
 
-**Context:** The LLM reads tool descriptions before every call. For the agent to author a working handler after Phase C, the `create_sync` description must explain the new required export, show at least one concrete example, and note that `update_sync` calls that change `handler_code` must preserve it. A Linear HMAC-SHA256-hex example is enough for the common case; the agent can web-search for GitHub/Slack variants when needed (we already tell it to web-search for unfamiliar integrations).
+**Context:** Three LLM-facing prose updates that ship together:
+
+1. **System prompt** — append a "Debugging a sync that's silent" section that encodes the 401-triage rubric. Fires proactively when the user says "my sync isn't working" without needing a tool-description prompt.
+2. **create_sync tool description** — explain the new required `verifySignature` export with a concrete Linear example + extend `schema_ddl` authoring guidance to require a `created_at INTEGER NOT NULL` column on every facet table.
+3. **update_sync tool description** — short cross-reference reminder: don't drop `verifySignature` when updating `handler_code`.
+
+The LLM reads the tool descriptions before every call and the system prompt once per turn (prompt-cached). Tool descriptions carry per-call details (function signatures, contracts, examples); the system prompt carries reasoning protocols (the 401-triage decision procedure). This division matches the existing file-level split — see the top comment in `src/agent/system-prompt.ts`.
+
+### System-prompt changes
+
+Two edits to `src/agent/system-prompt.ts`.
+
+**Edit 1 — extend the probe loop's Phase 2 with a signature-verification sanity gate.** Find the existing "Phase 2 — trigger" paragraph in the "## The probe loop — for unfamiliar integrations" section (around line 70). Replace with:
+
+```
+**Phase 2 — trigger and verify signature handling.** Get at least one real webhook to land. Either:
+- Ask the user to perform the action in the upstream (create a test issue, etc.), or
+- Use \`run_in_sync\` to call the upstream API yourself. Your \`fetch\` call routes through the same auth proxy the handler uses — the upstream token is injected automatically.
+
+**After triggering, check \`get_sync_errors\` before proceeding to Phase 3.** If you see 401 rows with \`error_message: "signature verification rejected by handler"\`, your \`verifySignature\` export is wrong — the facet rejected legitimate deliveries. Common causes: wrong header name (\`linear-signature\` vs \`x-hub-signature-256\`), wrong encoding (hex vs base64), missing prefix (\`sha256=\`), wrong algorithm. Fix via \`update_sync\`, re-trigger, verify a 2xx + a row in \`raw_events\`. Do not proceed to Phase 3 until the trigger produces a clean 2xx — Phase 3's payload refinement is meaningless if nothing is landing.
+
+One sample is usually enough once auth is working. Two or three across different action types (create/update/remove) is better.
+```
+
+**Edit 2 — append a new section "Debugging a sync that was working and went silent"** — placed AFTER the "## Webhook sub-agents" section and BEFORE "## Response style":
+
+```
+## Debugging a sync that was working and went silent
+
+This is the BACKUP path — at setup time the probe loop's Phase 2 already catches verifier bugs. This rubric is for the other scenario: a sync that was landing real data stops doing so, and \`<sync_errors>\` shows accumulated 401s.
+
+Don't immediately assume the verifier broke. A 401 means signature verification rejected the delivery — that's EITHER a verifier bug (upstream rotated the secret, handler dependency changed, schema edit accidentally dropped the export) OR scanners / malicious actors probing the public webhook URL with bogus signatures (normal internet noise for any publicly-reachable endpoint).
+
+**Triage rubric.** Run this decision procedure before proposing a fix:
+
+1. **Count and window the errors.** \`get_sync_errors(sync_id, 50)\` — how many 401s in the last hour? When did the earliest one occur? (\`occurred_at\` is unix ms.) Note the start timestamp \`T_err\`.
+
+2. **Count successful deliveries in the same window.** Run \`query_sync(sync_id, "SELECT COUNT(*) AS c FROM <table> WHERE created_at > <T_err>")\` against the facet's own data table. (Every facet schema has a \`created_at\` column by convention — see create_sync's description. If this specific sync's schema is missing one, fall back to step 3.)
+
+3. **Fallback via syncs.updated_at.** If the facet schema lacks a timestamp column, use the sync's supervisor-tracked liveness from \`list_syncs\` — the \`updated_at\` field is bumped only on 2xx deliveries. Fresh (within the error window) means real deliveries are landing somewhere; stale means nothing real has landed in that window.
+
+4. **Decide.**
+   - **Rows exist alongside 401s** (or \`updated_at\` is fresh): 401s are scanner noise. Tell the user the verifier is working and the 401s are harmless internet background. Don't touch the handler.
+   - **Zero rows + many 401s** (or \`updated_at\` is stale older than \`T_err\`): the verifier is rejecting legitimate webhooks. Read the current handler via \`get_sync(sync_id)\`, identify the bug in \`verifySignature\` (wrong header name, wrong algorithm, wrong encoding, rotated secret — check the upstream's signing docs), propose \`update_sync\` with a corrected export. After the fix lands, ask the user to trigger a test event (or use \`run_in_sync\`) and re-check \`get_sync_errors\` to confirm — same sanity gate as the probe loop's Phase 2.
+
+**Why you can't just look at the error count alone:** a verifier that works perfectly still accumulates 401s from bots probing the URL. "Many 401s" is not a bug signal by itself; the signal is "many 401s AND zero real deliveries landing." The ratio is the signal, not the count.
+
+**Rate limiting** is not yet implemented (noted for V2). A scanner-spammed webhook URL will bloat \`sync_errors\` until the user cleans up. That's a noise problem, not a correctness problem — the verifier still protects the handler from unsigned payloads.
+```
+
+### create_sync.ts — the existing description update (unchanged plan text from here on)
+
+Update the tool description. The current text (lines 15–54 of `src/agent/tools/write/create-sync.ts`) describes `handleWebhook` in detail. Extend the `handler_code contract:` block to add the verifySignature requirement and example.
 
 ### create-sync.ts
 
@@ -644,6 +736,41 @@ handler_code: z
   ),
 ```
 
+**Also update the `schema_ddl` zod description** to require a `created_at` column:
+
+```ts
+schema_ddl: z
+  .string()
+  .describe(
+    "One or more CREATE TABLE / CREATE INDEX statements separated by semicolons. Use CREATE TABLE IF NOT EXISTS so re-applying is safe. SQLite types only: TEXT, INTEGER, REAL, BLOB, NULL. Store JSON-shaped fields (arrays, nested metadata) as TEXT and parse at read time. REQUIRED: include a `created_at INTEGER NOT NULL` column on every table holding webhook-ingested rows, populated with `Date.now()` at INSERT time. This is a debuggability requirement — the 401-triage rubric (see the system prompt) cross-references ingestion timestamps against sync_errors.occurred_at to distinguish 'verifier broken' from 'scanner noise'. Without it, the agent cannot self-diagnose why a sync has gone silent."
+  ),
+```
+
+**Also update the example handler in the main description** — the INSERT statement should write `Date.now()` into `created_at` so the example matches the new convention. Change:
+
+```js
+sql.exec(
+  "INSERT OR REPLACE INTO issues (id, title, priority) VALUES (?, ?, ?)",
+  id,
+  payload.data.title,
+  payload.data.priority
+);
+```
+
+to:
+
+```js
+sql.exec(
+  "INSERT OR REPLACE INTO issues (id, title, priority, created_at) VALUES (?, ?, ?, ?)",
+  id,
+  payload.data.title,
+  payload.data.priority,
+  Date.now()
+);
+```
+
+And imply the schema has `created_at INTEGER NOT NULL` alongside the other columns.
+
 ### update-sync.ts
 
 The update-sync description doesn't need to duplicate the contract — just a reminder that the verifier must be preserved across updates. Find the existing `handler_code` zod description (around line 49):
@@ -672,29 +799,33 @@ handler_code: z
   ),
 ```
 
-- [ ] **Step 1: Update create-sync.ts**
+- [ ] **Step 1: Update system-prompt.ts**
 
-Replace the `description` template literal and the `handler_code` zod description per above.
+Append the "## Debugging a sync that's silent" section to `SYSTEM_PROMPT`, placed AFTER "## Webhook sub-agents" and BEFORE "## Response style".
 
-- [ ] **Step 2: Update update-sync.ts**
+- [ ] **Step 2: Update create-sync.ts**
+
+Replace the `description` template literal, the `handler_code` zod description, AND the `schema_ddl` zod description per above. The example handler inside the description also gains the `created_at` column.
+
+- [ ] **Step 3: Update update-sync.ts**
 
 Replace the `handler_code` zod description per above.
 
-- [ ] **Step 3: Run tool tests**
+- [ ] **Step 4: Run tool tests**
 
 Run: `PATH="$HOME/.nvm/versions/node/v22.22.2/bin:$PATH" npx vitest run src/agent/tools/write/create-sync.test.ts src/agent/tools/write/update-sync.test.ts`
 Expected: PASS (test assertions are behavior-based, not description-text-based — nothing should break).
 
-- [ ] **Step 4: Run full check**
+- [ ] **Step 5: Run full check**
 
 Run: `PATH="$HOME/.nvm/versions/node/v22.22.2/bin:$PATH" npm run check`
 Expected: fully green.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/agent/tools/write/create-sync.ts src/agent/tools/write/update-sync.ts
-git commit -m "feat(tools): document verifySignature contract in create/update_sync"
+git add src/agent/system-prompt.ts src/agent/tools/write/create-sync.ts src/agent/tools/write/update-sync.ts
+git commit -m "feat(agent): 401-triage rubric + verifySignature contract + created_at convention"
 ```
 
 ---
@@ -753,11 +884,25 @@ In the main chat, ask the agent:
 
 Expected: a list of tables (issues or similar). Proves the wrapper still compiles with the existing handler that lacks `verifySignature`. (The wrapper's `__verifySignature` method will fail-closed on this handler, but `__query` / `query_sync` path is orthogonal — no signature check involved.)
 
-- [ ] **Step 3: Trigger a real Linear webhook to confirm the 401**
+- [ ] **Step 3: Trigger a real Linear webhook to confirm the 401 + that it logs to sync_errors**
 
 Create a Linear issue that matches the existing sync's filter (e.g., priority = Urgent in the relevant team). Watch `npm run dev` logs.
 
 Expected: webhook POST arrives, supervisor returns 401 ("invalid signature"). Proves fail-closed is working — the old handler without `verifySignature` is correctly rejected.
+
+Also verify the 401 landed in `sync_errors` (this is the new Phase C behavior). In chat:
+
+> "Use get_sync_errors on linear-high-urgent-issues with limit 5. I want to see if the 401 from the last Linear event showed up."
+
+Expected: the agent returns a row with `error_message: "signature verification rejected by handler"` and an `occurred_at` timestamp close to now. Proves the visibility fix works end-to-end — the 401 is observable to the agent, not a silent drop.
+
+- [ ] **Step 3.5: Confirm the agent exercises the 401-triage rubric**
+
+In chat:
+
+> "My linear-high-urgent-issues sync seems broken — no new data is landing. Can you figure out what's wrong?"
+
+Expected: the agent should (a) call `get_sync_errors` and note the recent 401s, (b) call `query_sync` against the sync's own table for rows created in the same window, (c) note that no rows exist → conclude the verifier is rejecting legitimate webhooks, (d) offer to `update_sync` with a corrected handler. If instead the agent just says "there are errors, here they are" without running the ratio check — the system-prompt rubric isn't landing; reconsider the placement or wording.
 
 - [ ] **Step 4: Ask the agent to migrate the handler via update_sync**
 
@@ -806,6 +951,9 @@ If any step fails, capture logs (wrangler tail, dev console) and diagnose. Commo
 - ✅ The existing Linear sync continues to work after migration (update_sync with verifier).
 - ✅ Tests cover the happy path, missing-header path, bad-signature path, and the end-to-end route.
 - ✅ Tool descriptions include a concrete example the LLM can adapt.
+- ✅ Accumulated 401s are visible to the agent via `sync_errors` (with `occurred_at` timestamps).
+- ✅ Agent has a documented decision procedure (system-prompt rubric) for distinguishing "verifier broken" from "scanner noise."
+- ✅ Agent-authored schemas are required to include a `created_at` column so the triage rubric's data-side correlation actually works.
 
 **2. Type consistency:**
 
