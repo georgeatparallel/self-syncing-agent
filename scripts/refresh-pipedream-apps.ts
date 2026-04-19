@@ -65,8 +65,13 @@ async function fetchAccessToken(env: Record<string, string>): Promise<string> {
 async function walk(token: string): Promise<AppEntry[]> {
   const out: AppEntry[] = [];
   let cursor: string | null = null;
-  for (let i = 0; i < 100; i++) {
+  // Pipedream's default page size without `limit` is tiny (~10), so a
+  // 100-iter cap only yields ~1000 apps while the real catalog is ~3200.
+  // Explicitly request the API max (100) and raise the safety ceiling
+  // to 500 iterations so the walk always exhausts the catalog.
+  for (let i = 0; i < 500; i++) {
     const url = new URL("https://api.pipedream.com/v1/connect/apps");
+    url.searchParams.set("limit", "100");
     if (cursor) url.searchParams.set("after", cursor);
     const res = await fetch(url, {
       headers: { authorization: `Bearer ${token}` }
