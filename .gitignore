@@ -152,3 +152,4 @@ dynamic-workers.md
 # Brainstorming companion session files
 .superpowers/
 
+worker-configuration.d.ts

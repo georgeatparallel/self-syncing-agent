@@ -1,3 +1,8 @@
-ANTHROPIC_API_KEY=sk-ant-your-key-here
-PARALLEL_API_KEY=your-parallel-api-key-here
-PUBLIC_BASE_URL=https://your-public-worker-url.workers.dev
+ANTHROPIC_API_KEY=<your-anthropic-api-key>
+PARALLEL_API_KEY=<your-parallel-api-key>
+PUBLIC_BASE_URL=<your-public-base-url>
+PIPEDREAM_PROJECT_ID=<your-pipedream-project-id>
+PIPEDREAM_CLIENT_ID=<your-pipedream-client-id>
+PIPEDREAM_CLIENT_SECRET=<your-pipedream-client-secret>
+PIPEDREAM_ENVIRONMENT=development
+FIRECRAWL_API_KEY=<your-firecrawl-api-key>
