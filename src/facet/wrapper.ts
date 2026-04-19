@@ -95,10 +95,12 @@ import { createAgent } from "./agent.js";
 class FacetAgentBridge extends RpcTarget {
   #sql;
   #userId;
+  #syncId;
   constructor(deps) {
     super();
     this.#sql = deps.sql;
     this.#userId = deps.userId;
+    this.#syncId = deps.syncId ?? "";
   }
   async sqlExec(query, ...bindings) {
     try {
@@ -111,6 +113,9 @@ class FacetAgentBridge extends RpcTarget {
   }
   async getUserId() {
     return this.#userId;
+  }
+  async getSyncId() {
+    return this.#syncId;
   }
 }
 
@@ -129,7 +134,8 @@ export class App extends DurableObject {
     this.#ensureSchema();
     const bridge = new FacetAgentBridge({
       sql: this.ctx.storage.sql,
-      userId: this.ctx.props ? this.ctx.props.userId : ""
+      userId: this.ctx.props ? this.ctx.props.userId : "",
+      syncId: this.ctx.props ? this.ctx.props.syncId : ""
     });
     const agent = createAgent({ llm: this.env.LLM, bridge });
     const ctx = {
