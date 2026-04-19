@@ -175,13 +175,15 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
         return { status: 401, body: "invalid signature" };
       }
 
-      // Rebuild a minimal Request for the facet. Agent handlers read the
-      // body via request.json(); headers beyond content-type are not part
-      // of the documented handler contract.
+      // Build the facet's Request mirroring the upstream headers so handlers
+      // can read event-type / delivery-id / signature-related headers
+      // (x-github-event, stripe-signature, x-slack-signature, etc.). Headers
+      // flow in as a Record<string,string> — handing them straight to the
+      // Request constructor populates Headers object keys the handler expects.
       const facetRequest = new Request("https://facet.internal/webhook", {
         method: "POST",
         body: body,
-        headers: { "content-type": "application/json" }
+        headers: headers
       });
       const facetResponse = await facet.fetch(facetRequest);
       if (facetResponse.status >= 500) {
