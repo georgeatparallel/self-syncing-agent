@@ -49,13 +49,19 @@
  * The agent's handler.js contract:
  *
  *   export async function handleWebhook(request, sql, ctx): Promise<Response>
- *     — called for every verified webhook. `sql` is this.ctx.storage.sql
- *       (call sql.exec(query, ...args) and sql.exec(query, ...args).toArray()
- *       for reads). The optional third `ctx` arg provides `{ agent, waitUntil }`:
- *       `agent` is a preconfigured subagent runner (built from this.env.LLM
- *       + an RpcTarget bridge to this facet's sql/fetch/userId) that the
- *       handler can invoke to process the webhook with an LLM; `waitUntil`
- *       forwards to this.ctx.waitUntil for background work.
+ *     — called for every verified webhook. `request.headers` mirrors the
+ *       upstream delivery's headers (lowercased keys as the supervisor
+ *       received them), so handlers can dispatch on e.g. x-github-event,
+ *       stripe-signature, linear-event, x-slack-signature, etc. via the
+ *       standard case-insensitive Headers API (`request.headers.get(...)`).
+ *       `request.body` / `request.json()` yield the raw upstream body.
+ *       `sql` is this.ctx.storage.sql (call sql.exec(query, ...args) and
+ *       sql.exec(query, ...args).toArray() for reads). The optional third
+ *       `ctx` arg provides `{ agent, waitUntil }`: `agent` is a preconfigured
+ *       subagent runner (built from this.env.LLM + an RpcTarget bridge to
+ *       this facet's sql/fetch/userId) that the handler can invoke to process
+ *       the webhook with an LLM; `waitUntil` forwards to this.ctx.waitUntil
+ *       for background work.
  *
  *   export async function verifySignature(body, headers, secret): Promise<boolean>
  *     — REQUIRED. Called by the supervisor before handleWebhook. `body` is

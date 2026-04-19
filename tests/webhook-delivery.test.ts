@@ -358,6 +358,95 @@ describe("handleWebhookDelivery", () => {
     });
   });
 
+  it("forwards upstream headers to the facet so handlers can dispatch on x-*-event", async () => {
+    // Regression for a bug where handleWebhookDelivery rebuilt the facet's
+    // Request with ONLY content-type, stripping every upstream header.
+    // Any handler dispatching on e.g. x-github-event silently saw null
+    // and short-circuited to 200 "ignored", dropping the delivery. The
+    // assertion below requires the header to reach the facet: if the
+    // fake facet's fetch doesn't see x-test-header === "expected-value",
+    // no row is written and the expectation fails.
+    const stub = env.ChatAgent.get(
+      env.ChatAgent.idFromName("wh-header-forward")
+    );
+    await runInDurableObject(stub, async (instance) => {
+      await (
+        instance as never as { setName: (n: string) => Promise<void> }
+      ).setName("wh-header-forward");
+      const syncId = seedSync(instance as never);
+      const body = new TextEncoder().encode('{"action":"ping"}');
+      const sig = await hmacHex(body, WEBHOOK_SECRET);
+
+      // Fake facet owns its own tiny events table so the test can assert
+      // that the handler dispatched on the forwarded header. We use the
+      // agent's underlying ctx.storage.sql (a positional-args API) rather
+      // than the SDK's tagged-template `sql` wrapper.
+      const rawSql = (
+        instance as never as {
+          ctx: { storage: { sql: SqlStorage } };
+        }
+      ).ctx.storage.sql;
+      rawSql.exec(
+        "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, tag TEXT)"
+      );
+
+      const restore = installFakeFacets(instance, {
+        get() {
+          return {
+            fetch: async (req) => {
+              const hdr = req.headers.get("x-test-header");
+              if (hdr === "expected-value") {
+                rawSql.exec(
+                  "INSERT INTO events (id, tag) VALUES (1, ?)",
+                  "matched"
+                );
+                return new Response("matched", { status: 200 });
+              }
+              return new Response("header not forwarded", { status: 200 });
+            },
+            __supervisorPing: async () => {},
+            __verifySignature: verifyLinearHmac
+          };
+        },
+        abort: () => {},
+        delete: () => {}
+      });
+
+      try {
+        const res = await (
+          instance as never as {
+            handleWebhookDelivery: (
+              userId: string,
+              id: string,
+              body: ArrayBuffer,
+              headers: Record<string, string>
+            ) => Promise<{ status: number; body: string }>;
+          }
+        ).handleWebhookDelivery(
+          "wh-header-forward",
+          syncId,
+          body.buffer as ArrayBuffer,
+          {
+            "linear-signature": sig,
+            "content-type": "application/json",
+            "x-test-header": "expected-value"
+          }
+        );
+        expect(res.status).toBe(200);
+
+        const rows = rawSql
+          .exec<{ id: number; tag: string }>(
+            "SELECT id, tag FROM events WHERE id = 1"
+          )
+          .toArray();
+        expect(rows).toHaveLength(1);
+        expect(rows[0].tag).toBe("matched");
+      } finally {
+        restore();
+      }
+    });
+  });
+
   it("returns 5xx and logs an error when the facet responds with 500", async () => {
     const stub = env.ChatAgent.get(env.ChatAgent.idFromName("wh-facet500"));
     await runInDurableObject(stub, async (instance) => {
