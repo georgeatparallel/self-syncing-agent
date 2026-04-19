@@ -98,7 +98,9 @@ Error shapes:
         agent.env.LOADER as unknown as {
           load: (c: unknown) => ExecWorkerStub;
         }
-      ).load(buildExecWorkerCode({ code, userId: agent.name }));
+      ).load(
+        buildExecWorkerCode({ code, userId: agent.name, syncId: sync.id })
+      );
       const entrypoint = workerStub.getEntrypoint();
 
       // We can't pass the raw facet DO stub as an RPC arg — workerd

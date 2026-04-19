@@ -28,7 +28,8 @@ describe("buildExecWorkerCode", () => {
   it("produces a WorkerCode with main.js + exec.js and mainModule=main.js", () => {
     const code = buildExecWorkerCode({
       code: SAMPLE_CODE,
-      userId: "user-abc"
+      userId: "user-abc",
+      syncId: "sync-1"
     });
     expect(code.mainModule).toBe("main.js");
     expect(Object.keys(code.modules).sort()).toEqual(["exec.js", "main.js"]);
@@ -37,7 +38,8 @@ describe("buildExecWorkerCode", () => {
   it("embeds the agent-authored code verbatim as exec.js", () => {
     const code = buildExecWorkerCode({
       code: SAMPLE_CODE,
-      userId: "u"
+      userId: "u",
+      syncId: "s"
     });
     expect(code.modules["exec.js"]).toBe(SAMPLE_CODE);
   });
@@ -45,7 +47,8 @@ describe("buildExecWorkerCode", () => {
   it("includes the fixed wrapper source verbatim in main.js", () => {
     const code = buildExecWorkerCode({
       code: SAMPLE_CODE,
-      userId: "u"
+      userId: "u",
+      syncId: "s"
     });
     expect(code.modules["main.js"]).toBe(EXEC_WRAPPER_SOURCE);
   });
@@ -53,21 +56,23 @@ describe("buildExecWorkerCode", () => {
   it("pins a compatibilityDate matching the parent worker", () => {
     const code = buildExecWorkerCode({
       code: SAMPLE_CODE,
-      userId: "u"
+      userId: "u",
+      syncId: "s"
     });
     // Must match wrangler.jsonc's compatibility_date so facet and exec
     // isolates share the same runtime semantics.
     expect(code.compatibilityDate).toBe("2026-03-02");
   });
 
-  it("sets globalOutbound to HttpGateway stamped with userId props", () => {
+  it("sets globalOutbound to HttpGateway stamped with {userId, syncId} props", () => {
     const code = buildExecWorkerCode({
       code: SAMPLE_CODE,
-      userId: "user-xyz"
+      userId: "user-xyz",
+      syncId: "sync-42"
     });
     expect(code.globalOutbound).toMatchObject({
       __mockHttpGateway: true,
-      props: { userId: "user-xyz" }
+      props: { userId: "user-xyz", syncId: "sync-42" }
     });
   });
 });

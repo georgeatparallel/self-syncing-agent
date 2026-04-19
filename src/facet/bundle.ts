@@ -21,6 +21,13 @@ export interface BuildFacetWorkerCodeInput {
   schemaDdl: string;
   handlerCode: string;
   userId: string;
+  /**
+   * The sync's id. Stamped on HttpGateway props so the per-fetch
+   * `resolveEgress` RPC can scope its api_hosts lookup to exactly this
+   * sync's row (no cross-sync walk). Stable across the sync's lifetime;
+   * Worker Loader caches bundles by `sync:<syncId>:v<version>`.
+   */
+  syncId: string;
 }
 
 /**
@@ -37,8 +44,11 @@ export interface BuildFacetWorkerCodeInput {
  * never sees the key.
  *
  * globalOutbound is the HttpGateway WorkerEntrypoint, stamped with
- * ctx.props.userId so the gateway knows which user DO this facet belongs
- * to.
+ * {userId, syncId} so the gateway can RPC into the user's ChatAgent DO
+ * and read this sync's api_hosts + user's connected_accounts live on
+ * every fetch. Stamping is deliberately minimal: mutable state
+ * (api_hosts, account_id) lives in the DO, not on cached props, so
+ * Worker Loader's bundle-by-codeId cache never serves stale values.
  */
 export function buildFacetWorkerCode(
   input: BuildFacetWorkerCodeInput
@@ -68,6 +78,8 @@ export function buildFacetWorkerCode(
     env: {
       LLM: exportsRef.LLMGateway({ props: { userId: input.userId } })
     },
-    globalOutbound: exportsRef.HttpGateway({ props: { userId: input.userId } })
+    globalOutbound: exportsRef.HttpGateway({
+      props: { userId: input.userId, syncId: input.syncId }
+    })
   };
 }

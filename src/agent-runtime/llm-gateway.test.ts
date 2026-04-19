@@ -28,7 +28,8 @@ const baseReq: AgentRequest = {
 const fakeBridge = {
   sqlQuery: vi.fn(),
   sqlExec: vi.fn(),
-  getUserId: vi.fn().mockResolvedValue("u-1")
+  getUserId: vi.fn().mockResolvedValue("u-1"),
+  getSyncId: vi.fn().mockResolvedValue("s-1")
 };
 
 const fakeEnv = {
@@ -40,6 +41,7 @@ describe("runAgent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fakeBridge.getUserId.mockResolvedValue("u-1");
+    fakeBridge.getSyncId.mockResolvedValue("s-1");
   });
 
   it("returns the model's final text on a tool-free response", async () => {
@@ -185,6 +187,6 @@ describe("runAgent", () => {
     expect(req.url).toBe("https://api.linear.app/graphql");
     expect(req.method).toBe("POST");
     expect(env).toBe(fakeEnv);
-    expect(props).toEqual({ userId: "u-1" });
+    expect(props).toEqual({ userId: "u-1", syncId: "s-1" });
   });
 });

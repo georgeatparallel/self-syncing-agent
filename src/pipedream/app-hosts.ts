@@ -32,7 +32,31 @@ export function isDeniedHost(hostname: string): boolean {
   // IPv4-mapped IPv6 (::ffff:a.b.c.d) — unwrap and re-check against IPv4 rules.
   // Must run BEFORE the other checks so e.g. ::ffff:127.0.0.1 hits the IPv4
   // loopback CIDR rather than slipping through the IPv6 branch.
-  if (h.startsWith("::ffff:")) return isDeniedHost(h.slice(7));
+  if (h.startsWith("::ffff:")) {
+    const tail = h.slice(7);
+    // Node's URL parser normalizes ::ffff:a.b.c.d into the hex-quads
+    // form ::ffff:aabb:ccdd. Detect that shape (two colon-separated
+    // 4-hex-digit groups) and re-assemble as dotted decimal before
+    // delegating back to the IPv4 rules. Without this, `fetch()`ing a
+    // URL like `http://[::ffff:169.254.169.254]/` would slip past.
+    const quads = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (quads) {
+      const hi = Number.parseInt(quads[1], 16);
+      const lo = Number.parseInt(quads[2], 16);
+      if (
+        Number.isFinite(hi) &&
+        Number.isFinite(lo) &&
+        hi >= 0 &&
+        hi <= 0xffff &&
+        lo >= 0 &&
+        lo <= 0xffff
+      ) {
+        const dotted = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+        return isDeniedHost(dotted);
+      }
+    }
+    return isDeniedHost(tail);
+  }
   if (h === "localhost" || h === "ip6-localhost") return true;
   if (h.endsWith(".internal") || h.endsWith(".local")) return true;
   if (h === "::1") return true;

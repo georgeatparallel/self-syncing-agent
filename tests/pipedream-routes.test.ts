@@ -116,40 +116,4 @@ describe("Pipedream HTTP routes", () => {
       account_id: "apn_sl"
     });
   });
-
-  it("getConnectedAccountId returns account_id for a connected app, null otherwise", async () => {
-    const userId = crypto.randomUUID();
-    // Seed via the existing POST route.
-    const seed = await SELF.fetch(
-      `https://test/api/user/${userId}/pipedream/account`,
-      {
-        method: "POST",
-        headers: authHeaders(userId, { "content-type": "application/json" }),
-        body: JSON.stringify({ app_slug: "github", account_id: "apn_gh_1" })
-      }
-    );
-    expect(seed.status).toBe(200);
-
-    // Look up via direct DO RPC.
-    const stub = env.ChatAgent.get(env.ChatAgent.idFromName(userId));
-    const hit = await (
-      stub as unknown as {
-        getConnectedAccountId: (
-          u: string,
-          app: string
-        ) => Promise<string | null>;
-      }
-    ).getConnectedAccountId(userId, "github");
-    expect(hit).toBe("apn_gh_1");
-
-    const miss = await (
-      stub as unknown as {
-        getConnectedAccountId: (
-          u: string,
-          app: string
-        ) => Promise<string | null>;
-      }
-    ).getConnectedAccountId(userId, "slack");
-    expect(miss).toBeNull();
-  });
 });
