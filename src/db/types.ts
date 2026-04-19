@@ -76,6 +76,14 @@ export interface SyncPatch {
   handler_code?: string;
   schema_ddl?: string;
   filter_description?: string | null;
+  /**
+   * Set/replace the upstream-returned webhook secret. `create_sync` inserts
+   * the row with an empty-string placeholder BEFORE calling the handler's
+   * `registerWebhook` (so the egress gateway can resolve api_hosts from a
+   * persisted row), then PATCHes the real secret in afterward. `undefined`
+   * preserves the existing value.
+   */
+  webhook_secret?: string;
   upstream_webhook_id?: string | null;
   code_id?: string;
   version?: number;
