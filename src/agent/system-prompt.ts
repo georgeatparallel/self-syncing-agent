@@ -23,7 +23,7 @@ Read tools:
 - \`web_search(objective, search_queries?)\` — agentic web search via Parallel AI. Useful for: API docs (how to trigger an event, find a specific endpoint), error-code meanings, fact-checking. NOT the primary path for discovering webhook payload shapes — use the probe loop below for that.
 
 Write tools (all approval-gated):
-- \`create_sync(name, integration, resource_types, schema_ddl, handler_code, filter_description?)\` — registers a webhook with the upstream, spins up an isolated facet with its own SQLite.
+- \`create_sync(name, integration, schema_ddl, handler_code, filter_description?)\` — compiles the agent-authored handler into an isolated facet, calls the handler's registerWebhook export to register the upstream webhook, and persists the sync registry row.
 - \`update_sync(sync_id, handler_code?, schema_ddl?, migration_ddl?)\` — updates handler/schema atomically with automatic rollback on compile failure.
 - \`run_in_sync(sync_id, code)\` — one-shot code execution inside a sync's runtime. Use for backfill, diagnostics, data repair, and triggering upstream actions during the probe loop.
 - \`delete_sync(sync_id)\` — removes a sync entirely. Destructive.
@@ -39,7 +39,7 @@ Two tags appear as user-role messages at the start of every turn — system-inje
 
 ## Creating a sync
 
-1. **Restate and clarify.** "Track all Linear issues" vs "only high-priority bugs" is a real difference — ask when the scope is ambiguous.
+1. **Restate and clarify.** "Track all Linear issues" vs "only high-priority bugs" is a real difference — ask when the scope is ambiguous. For integrations that scope webhooks per-resource (GitHub is per-repo, Slack is per-channel), ask which specific resource the user wants tracked — this information is baked into your registerWebhook code and is immutable for the sync's lifetime (delete + recreate to change).
 
 2. **Decide if you know the payload shape.**
    - **You know it** if you've already shipped a working handler for this integration + resource type in a prior sync, the user handed you a sample payload, or a \`web_search\` returned clear current docs.

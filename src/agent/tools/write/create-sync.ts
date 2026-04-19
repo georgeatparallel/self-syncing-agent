@@ -23,75 +23,171 @@ interface FacetRegisterRpc {
 
 export function createSyncTool(agent: ChatAgent) {
   return tool({
-    description: `Create a new sync. Registers a webhook with the upstream service, loads the agent-authored handler into an isolated facet runtime with its own SQLite, applies the schema DDL, and persists the sync registry row. Approval-gated — the user sees the drafted schema_ddl and handler_code in the approval dialog before anything runs. Call this AFTER you've shown the draft in chat.
+    description: `Create a new sync. Compiles the agent-authored handler into an isolated facet runtime with its own SQLite, applies the schema DDL, calls the handler's registerWebhook export to register the webhook with the upstream service, and persists the sync registry row. Approval-gated — the user sees the drafted schema_ddl and handler_code in the approval dialog before anything runs. Call this AFTER you've shown the draft in chat.
 
-handler_code contract: JavaScript module source that MUST export TWO async functions:
+handler_code contract: JavaScript module source that MUST export FOUR async functions (the last is technically optional but strongly recommended for clean deletes).
 
 1) \`async function verifySignature(body, headers, secret): Promise<boolean>\`
-   — Called by the supervisor BEFORE handleWebhook on every delivery.
-   - \`body\` is a Uint8Array of the raw request body.
-   - \`headers\` is a Record<string, string> with lowercased keys.
-   - \`secret\` is the webhook_secret the upstream registration returned (stored for you, passed in at call time — never hardcode it).
-   - Return true to accept the delivery, false (or throw) to reject it — the supervisor returns 401 on false / thrown.
-   - REQUIRED. A missing export fails closed (supervisor returns 401 for every delivery), so every handler must own its signature verification. Each upstream signs differently: Linear uses HMAC-SHA256-hex in \`linear-signature\`; GitHub uses \`x-hub-signature-256: sha256=<hex>\`; Slack uses \`v0:<timestamp>:<body>\` signed with HMAC and shipped in \`x-slack-signature\` as \`v0=<hex>\`. Check the upstream's docs if unsure.
+   Called BEFORE handleWebhook on every delivery. Return true to accept, false (or throw) to reject with 401.
+   - body: Uint8Array of raw request body
+   - headers: Record<string, string> with lowercased keys
+   - secret: the secret returned from registerWebhook
+   REQUIRED. Missing → every delivery 401s.
 
 2) \`async function handleWebhook(request, sql, ctx): Promise<Response>\`
-   — Called AFTER the signature has been verified.
-   - \`request\` is the raw webhook POST.
-   - \`sql\` is the facet's own SQLite. \`sql.exec(query, ...bindings)\` for inserts/updates; \`sql.exec(query, ...bindings).toArray()\` for reads.
-   - \`ctx\` carries two capabilities:
-     - \`ctx.waitUntil(promise)\` — keep background work alive past the 200 response. Use this so the webhook returns a fast 200 while enrichment runs afterwards.
-     - \`ctx.agent({ model?, system, messages, maxSteps? })\` — spawn a sub-agent ReAct loop and get back a string. \`model\` is \`"haiku" | "sonnet" | "opus"\` (default \`"sonnet"\`). The sub-agent has three built-in tools: \`sql\` (reads + writes the facet's SQLite), \`fetch\` (upstream HTTP through the same credential-injecting proxy as the handler's own fetch), and \`exec\` (runs an agent-authored JS module in a fresh isolate). No nested \`ctx.agent()\` calls permitted.
-   - Return a 2xx Response for successful processing (including "filtered out, nothing to write" — use 200). Return 5xx only if you want the upstream to retry.
-   - Be idempotent. Upstreams may deliver the same event twice — use INSERT OR REPLACE or ON CONFLICT keyed on the resource's stable id from the payload.
-   - Do not import anything beyond the parameters. \`fetch\` is globally available for upstream API calls (the proxy injects auth automatically); most write-path handlers don't need it.
-   - Keep it fast. Upstream webhook timeouts are typically 5–30 seconds. If you need longer LLM reasoning, run it inside \`ctx.waitUntil(ctx.agent(...))\` so the 200 returns immediately and the sub-agent enriches the row in the background.
+   Called AFTER signature has been verified.
+   - request: raw webhook POST
+   - sql: the facet's own SQLite. sql.exec(query, ...bindings) for writes; sql.exec(...).toArray() for reads.
+   - ctx: { waitUntil, agent } — waitUntil for background work; ctx.agent({model, system, messages, maxSteps}) for sub-agent ReAct loops inside the delivery.
+   Return a 2xx Response on success. Be idempotent (INSERT OR REPLACE keyed on stable upstream id).
+   REQUIRED.
 
-Example handler for Linear (HMAC-SHA256-hex signature scheme):
+3) \`async function registerWebhook(fetch, config): Promise<{ id: string, secret: string }>\`
+   Called ONCE at create_sync time to register the webhook with the upstream.
+   - fetch: the global fetch, routes through the Pipedream credential-injecting proxy — auth headers are injected automatically for Pipedream-connected apps. You do NOT set Authorization headers yourself.
+   - config: { callbackUrl: string, label: string } — callbackUrl is the URL the upstream should POST to; label is a human-readable tag.
+   - Returns: { id: string, secret: string } — id used for later unregister; secret used by verifySignature. How you obtain \`secret\` depends on the upstream:
+     - Some upstreams (Linear) return the secret from their webhookCreate mutation.
+     - Others (GitHub) require you to generate a random secret and pass it at creation.
+   REQUIRED. A thrown error or wrong return shape aborts create_sync.
+
+4) \`async function unregisterWebhook(fetch, config): Promise<void>\`
+   Called from delete_sync.
+   - fetch: same proxy as above.
+   - config: { id: string, label: string } where id is what registerWebhook returned.
+   STRONGLY RECOMMENDED. If omitted, delete_sync deletes the local sync but leaves the upstream webhook registered (the user will see it in the upstream's dashboard and clean up manually). Provide this unless you know the upstream auto-cleans stale webhooks.
+
+Handler-level guidance:
+- No imports beyond the parameters. \`fetch\` and \`crypto\` are global; \`Date\`, \`TextEncoder\`, etc. work normally.
+- Keep handleWebhook fast. Upstream timeouts are typically 5–30s. For longer reasoning, \`ctx.waitUntil(ctx.agent(...))\`.
+- Include a \`created_at INTEGER NOT NULL\` column on every table (populated with \`Date.now()\` at INSERT) so debugging is tractable (see the system prompt's 401-triage rubric).
+- For unfamiliar integrations: use the probe loop from the system prompt. Don't guess signing schemes, payload shapes, or webhook-creation APIs from training data.
+
+Example 1 — Linear (GraphQL, upstream-generates-secret):
+
 \`\`\`js
+const LINEAR_API = "https://api.linear.app/graphql";
+
+export async function registerWebhook(fetch, { callbackUrl, label }) {
+  const res = await fetch(LINEAR_API, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      query: \`mutation($url: String!, $types: [String!]!, $label: String!) {
+        webhookCreate(input: { url: $url, resourceTypes: $types, allPublicTeams: true, label: $label }) {
+          success webhook { id secret }
+        }
+      }\`,
+      variables: { url: callbackUrl, types: ["Issue"], label }
+    })
+  });
+  const body = await res.json();
+  if (!body.data?.webhookCreate?.success) {
+    throw new Error("Linear webhookCreate failed: " + JSON.stringify(body));
+  }
+  const wh = body.data.webhookCreate.webhook;
+  return { id: wh.id, secret: wh.secret };
+}
+
+export async function unregisterWebhook(fetch, { id }) {
+  const res = await fetch(LINEAR_API, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      query: \`mutation($id: String!) { webhookDelete(id: $id) { success } }\`,
+      variables: { id }
+    })
+  });
+  const body = await res.json();
+  if (!body.data?.webhookDelete?.success) {
+    throw new Error("Linear webhookDelete failed: " + JSON.stringify(body));
+  }
+}
+
 export async function verifySignature(body, headers, secret) {
   const sig = headers["linear-signature"];
   if (!sig) return false;
   const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
+    "raw", new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
   );
   const computed = await crypto.subtle.sign("HMAC", key, body);
-  const hex = [...new Uint8Array(computed)]
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const hex = [...new Uint8Array(computed)].map(b => b.toString(16).padStart(2, "0")).join("");
   return hex === sig;
 }
 
 export async function handleWebhook(request, sql, ctx) {
   const payload = await request.json();
-  const id = payload.data.id;
+  const issue = payload.data;
   sql.exec(
     "INSERT OR REPLACE INTO issues (id, title, priority, created_at) VALUES (?, ?, ?, ?)",
-    id,
-    payload.data.title,
-    payload.data.priority,
-    Date.now()
+    issue.id, issue.title, issue.priority, Date.now()
   );
-  if (payload.data.priority === 1) {
-    ctx.waitUntil(
-      ctx.agent({
-        model: "sonnet",
-        system: "You are a Linear triage bot. Given an issue payload, write one sentence describing the likely root cause or next action.",
-        messages: [{ role: "user", content: JSON.stringify(payload.data) }]
-      }).then((note) =>
-        sql.exec("UPDATE issues SET triage = ? WHERE id = ?", note, id)
-      )
-    );
-  }
   return new Response("ok", { status: 200 });
 }
 \`\`\`
 
-For unfamiliar integrations or resource types: use the probe loop (described in the system prompt) before drafting the real handler. Don't guess payload field names from training data. Likewise, don't guess signature schemes — check the upstream's webhook documentation for which header name, hashing algorithm, and encoding (hex vs base64, prefix, etc.) the upstream uses.`,
+Example 2 — GitHub (REST, caller-provides-secret):
+
+\`\`\`js
+// Substitute OWNER/REPO with whatever the user asked to track.
+const GH_API = "https://api.github.com/repos/OWNER/REPO/hooks";
+
+export async function registerWebhook(fetch, { callbackUrl, label }) {
+  // GitHub requires the caller to provide the secret at creation.
+  // Generate a random one; we return it so the supervisor persists it
+  // for verifySignature to use later.
+  const secret = crypto.randomUUID() + crypto.randomUUID(); // ~256 bits
+
+  const res = await fetch(GH_API, {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/vnd.github+json" },
+    body: JSON.stringify({
+      name: "web",
+      active: true,
+      events: ["issues"],
+      config: { url: callbackUrl, content_type: "json", secret, insecure_ssl: "0" }
+    })
+  });
+  if (!res.ok) throw new Error("GitHub webhook create failed: " + res.status + " " + await res.text());
+  const body = await res.json();
+  return { id: String(body.id), secret };
+}
+
+export async function unregisterWebhook(fetch, { id }) {
+  const res = await fetch(\`\${GH_API}/\${id}\`, { method: "DELETE" });
+  // GitHub returns 204 on success, 404 if already gone — both fine.
+  if (!res.ok && res.status !== 404) {
+    throw new Error("GitHub webhook delete failed: " + res.status);
+  }
+}
+
+export async function verifySignature(body, headers, secret) {
+  const sig = headers["x-hub-signature-256"];
+  if (!sig || !sig.startsWith("sha256=")) return false;
+  const expected = sig.slice("sha256=".length);
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
+  );
+  const computed = await crypto.subtle.sign("HMAC", key, body);
+  const hex = [...new Uint8Array(computed)].map(b => b.toString(16).padStart(2, "0")).join("");
+  return hex === expected;
+}
+
+export async function handleWebhook(request, sql, ctx) {
+  const payload = await request.json();
+  if (payload.action !== "opened" && payload.action !== "edited") {
+    return new Response("ignored", { status: 200 });
+  }
+  const issue = payload.issue;
+  sql.exec(
+    "INSERT OR REPLACE INTO issues (id, number, title, state, created_at) VALUES (?, ?, ?, ?, ?)",
+    issue.id, issue.number, issue.title, issue.state, Date.now()
+  );
+  return new Response("ok", { status: 200 });
+}
+\`\`\``,
     inputSchema: z.object({
       name: z
         .string()
@@ -118,7 +214,7 @@ For unfamiliar integrations or resource types: use the probe loop (described in 
       handler_code: z
         .string()
         .describe(
-          "JavaScript module source that exports `async function verifySignature(body, headers, secret)` AND `async function handleWebhook(request, sql, ctx)`. Both exports are required. See the tool description for the full contract and a Linear example."
+          "JavaScript module source exporting FOUR async functions: `verifySignature(body, headers, secret)`, `handleWebhook(request, sql, ctx)`, `registerWebhook(fetch, config)` (all required), and `unregisterWebhook(fetch, config)` (strongly recommended). See the tool description for the full contract and worked examples for Linear + GitHub."
         ),
       filter_description: z
         .string()

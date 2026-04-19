@@ -47,7 +47,7 @@ Error shapes:
           .min(1)
           .optional()
           .describe(
-            "New handler.js source. Must export both `verifySignature(body, headers, secret)` AND `handleWebhook(request, sql, ctx)` — see create_sync's description for the full contract and example. An update_sync that drops either export will cause the next webhook delivery to fail (401 if verifySignature is missing, facet load failure if handleWebhook is missing). Omit if handler isn't changing."
+            "New handler.js source. Must export `verifySignature`, `handleWebhook`, `registerWebhook` (all required), and ideally `unregisterWebhook` — see create_sync's description for the full contract. NOTE: registerWebhook's CODE can be updated here but the upstream webhook REGISTRATION itself doesn't re-run — changing which resource types you subscribe to requires delete_sync + create_sync. update_sync is for handler logic (signature verification, payload handling) and schema evolution. Omit if handler isn't changing."
           ),
         schema_ddl: z
           .string()
