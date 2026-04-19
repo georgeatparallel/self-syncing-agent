@@ -82,7 +82,7 @@ describe("buildFacetWorkerCode", () => {
     });
   });
 
-  it("wrapper source exposes __query, __sqlExec, __verifySignature, and #ensureSchema", () => {
+  it("wrapper source exposes __query, __sqlExec, __verifySignature, __registerWebhook, __unregisterWebhook, and #ensureSchema", () => {
     const bundle = buildFacetWorkerCode({
       schemaDdl: "CREATE TABLE IF NOT EXISTS x (id TEXT);",
       handlerCode:
@@ -94,6 +94,8 @@ describe("buildFacetWorkerCode", () => {
     expect(main).toMatch(/async __query\(/);
     expect(main).toMatch(/async __sqlExec\(/);
     expect(main).toMatch(/async __verifySignature\(/);
+    expect(main).toMatch(/async __registerWebhook\(/);
+    expect(main).toMatch(/async __unregisterWebhook\(/);
     expect(main).toMatch(/import \* as handlerModule from "\.\/handler\.js"/);
   });
 });

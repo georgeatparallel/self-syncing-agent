@@ -27,6 +27,24 @@
  *     HMAC-hex, GitHub sha256=-prefixed, Slack v0:ts:body, etc.) and live
  *     in agent-authored code, not here. Fail-closed: missing export or
  *     thrown error → false → supervisor returns 401.
+ *   - __registerWebhook(config): supervisor-only RPC called ONCE at
+ *     create_sync time. Delegates to the handler's REQUIRED
+ *     registerWebhook(fetch, config) export, which performs the upstream
+ *     HTTP call to create the webhook subscription and returns
+ *     { id, secret }. THROWS if the export is missing — create_sync needs
+ *     the real error to surface meaningfully so its rollback logic can
+ *     react; fail-closed-to-undefined would be ambiguous. The facet-global
+ *     `fetch` is passed explicitly so the handler's code has a clear
+ *     parameter; it routes through the HttpGateway → Pipedream proxy, so
+ *     the handler never touches credentials.
+ *   - __unregisterWebhook(config): supervisor-only RPC called from
+ *     delete_sync. Delegates to the handler's STRONGLY RECOMMENDED
+ *     unregisterWebhook(fetch, config) export. Returns a discriminated
+ *     result: { ok: true } on success, { ok: false, reason:
+ *     "no_unregister_export" } if the export is missing (legacy
+ *     pre-Phase-D syncs), { ok: false, reason: "threw", detail: <message> }
+ *     on throw. Soft-fails so delete_sync can still tear down state even
+ *     when upstream deregistration is unavailable or fails.
  *
  * The agent's handler.js contract:
  *
@@ -46,6 +64,20 @@
  *       webhook_secret stored at create_sync time. Return true to accept
  *       the delivery, false (or throw) to reject with 401. Missing export
  *       → supervisor returns 401 (fail-closed).
+ *
+ *   export async function registerWebhook(fetch, config): Promise<{id: string, secret: string}>
+ *     — REQUIRED. Called once at create_sync time. Makes the upstream HTTP
+ *       call (via the injected facet-global `fetch`, which routes through
+ *       the HttpGateway → Pipedream proxy so auth is automatic) to create
+ *       the webhook subscription. Must return the upstream-assigned
+ *       webhook id and the shared secret the supervisor will use to verify
+ *       subsequent deliveries. Missing export → __registerWebhook throws.
+ *
+ *   export async function unregisterWebhook(fetch, config): Promise<void>
+ *     — STRONGLY RECOMMENDED. Called from delete_sync to tear down the
+ *       upstream webhook subscription. Same `fetch` semantics as
+ *       registerWebhook. Missing or throwing → __unregisterWebhook returns
+ *       a soft-fail result so delete_sync proceeds.
  */
 export const FACET_WRAPPER_SOURCE = `
 import { DurableObject, RpcTarget } from "cloudflare:workers";
@@ -139,6 +171,32 @@ export class App extends DurableObject {
       return result === true;
     } catch (e) {
       return false;
+    }
+  }
+
+  async __registerWebhook(config) {
+    if (typeof handlerModule.registerWebhook !== "function") {
+      throw new Error("handler.js missing required export: registerWebhook");
+    }
+    // fetch is a facet-global that routes through the HttpGateway→Pipedream
+    // proxy — auth is injected for Pipedream-connected apps automatically.
+    // Pass it explicitly so the handler has a clear parameter.
+    return await handlerModule.registerWebhook(fetch, config);
+  }
+
+  async __unregisterWebhook(config) {
+    if (typeof handlerModule.unregisterWebhook !== "function") {
+      return { ok: false, reason: "no_unregister_export" };
+    }
+    try {
+      await handlerModule.unregisterWebhook(fetch, config);
+      return { ok: true };
+    } catch (e) {
+      return {
+        ok: false,
+        reason: "threw",
+        detail: e instanceof Error ? e.message : String(e)
+      };
     }
   }
 }
