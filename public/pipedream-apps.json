@@ -1,0 +1,13 @@
+{
+  "apps": [
+    {
+      "name_slug": "__stub__",
+      "name": "Stub (run pnpm refresh:apps to replace)",
+      "img_src": "",
+      "description": "Replace me via pnpm refresh:apps",
+      "auth_type": null,
+      "categories": [],
+      "featured_weight": 0
+    }
+  ]
+}

@@ -19,7 +19,8 @@
     "lint": "oxlint src/",
     "check": "oxfmt --check . && oxlint src/ && tsc && vitest run",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "refresh:apps": "node --experimental-strip-types scripts/refresh-pipedream-apps.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.71",
