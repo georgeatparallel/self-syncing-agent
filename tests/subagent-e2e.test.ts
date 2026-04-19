@@ -81,6 +81,11 @@ interface FakeFacetStub {
   __query: (
     q: string
   ) => Promise<{ ok: true; rows: unknown[] } | { ok: false; error: string }>;
+  __verifySignature: (
+    body: Uint8Array,
+    headers: Record<string, string>,
+    secret: string
+  ) => Promise<boolean>;
 }
 interface FakeFacets {
   get(name: string, cb?: () => unknown): FakeFacetStub;
@@ -226,6 +231,20 @@ function installSubAgentFacet(
               error: e instanceof Error ? e.message : String(e)
             };
           }
+        },
+        __verifySignature: async (
+          body: Uint8Array,
+          headers: Record<string, string>,
+          secret: string
+        ) => {
+          // Mirrors what a real Linear handler's verifySignature export
+          // would do. Post-Phase-C the supervisor delegates signature
+          // verification to the facet handler, so the fake facet has to
+          // implement it too.
+          const sig = headers["linear-signature"];
+          if (!sig || sig.length === 0) return false;
+          const computed = await hmacHex(new Uint8Array(body), secret);
+          return computed === sig;
         }
       };
     },
@@ -282,15 +301,13 @@ describe("webhook sub-agent primitive (E2E)", () => {
               userId: string,
               id: string,
               body: ArrayBuffer,
-              sig: string | null
+              headers: Record<string, string>
             ) => Promise<{ status: number; body: string }>;
           }
-        ).handleWebhookDelivery(
-          userId,
-          syncId,
-          body.buffer as ArrayBuffer,
-          sig
-        );
+        ).handleWebhookDelivery(userId, syncId, body.buffer as ArrayBuffer, {
+          "linear-signature": sig,
+          "content-type": "application/json"
+        });
         expect(res.status).toBe(200);
 
         // The handler fires the sub-agent call under ctx.waitUntil so

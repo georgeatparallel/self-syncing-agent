@@ -30,9 +30,39 @@ async function hmacHex(body: Uint8Array, secret: string): Promise<string> {
     .join("");
 }
 
+// Helper: matches what an agent-authored Linear handler's verifySignature
+// export would do. Kept in the test file so the production code stays
+// free of any Linear-specific signature logic.
+async function verifyLinearHmac(
+  body: Uint8Array,
+  headers: Record<string, string>,
+  secret: string
+): Promise<boolean> {
+  const sig = headers["linear-signature"];
+  if (!sig || sig.length === 0) return false;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const normalizedBody = new Uint8Array(body);
+  const computed = await crypto.subtle.sign("HMAC", key, normalizedBody);
+  const hex = [...new Uint8Array(computed)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return hex === sig;
+}
+
 interface FakeFacetStub {
   fetch: (req: Request) => Promise<Response>;
   __supervisorPing: () => Promise<void>;
+  __verifySignature: (
+    body: Uint8Array,
+    headers: Record<string, string>,
+    secret: string
+  ) => Promise<boolean>;
 }
 interface FakeFacets {
   get(name: string, cb: () => unknown): FakeFacetStub;
@@ -92,7 +122,8 @@ describe("handleWebhookDelivery", () => {
               received.push(new Uint8Array(await req.arrayBuffer()));
               return new Response("ok", { status: 200 });
             },
-            __supervisorPing: async () => {}
+            __supervisorPing: async () => {},
+            __verifySignature: verifyLinearHmac
           };
         },
         abort: () => {},
@@ -106,14 +137,17 @@ describe("handleWebhookDelivery", () => {
               userId: string,
               id: string,
               body: ArrayBuffer,
-              sig: string | null
+              headers: Record<string, string>
             ) => Promise<{ status: number; body: string }>;
           }
         ).handleWebhookDelivery(
           "wh-happy",
           syncId,
           body.buffer as ArrayBuffer,
-          sig
+          {
+            "linear-signature": sig,
+            "content-type": "application/json"
+          }
         );
         expect(res.status).toBe(200);
         expect(received).toHaveLength(1);
@@ -140,14 +174,14 @@ describe("handleWebhookDelivery", () => {
             userId: string,
             id: string,
             body: ArrayBuffer,
-            sig: string | null
+            headers: Record<string, string>
           ) => Promise<{ status: number; body: string }>;
         }
       ).handleWebhookDelivery(
         "wh-404",
         "00000000-0000-0000-0000-000000000000",
         body.buffer as ArrayBuffer,
-        sig
+        { "linear-signature": sig, "content-type": "application/json" }
       );
       expect(res.status).toBe(404);
     });
@@ -161,22 +195,49 @@ describe("handleWebhookDelivery", () => {
       ).setName("wh-nosig");
       const syncId = seedSync(instance as never);
       const body = new TextEncoder().encode("{}");
-      const res = await (
-        instance as never as {
-          handleWebhookDelivery: (
-            userId: string,
-            id: string,
-            body: ArrayBuffer,
-            sig: string | null
-          ) => Promise<{ status: number; body: string }>;
-        }
-      ).handleWebhookDelivery(
-        "wh-nosig",
-        syncId,
-        body.buffer as ArrayBuffer,
-        null
-      );
-      expect(res.status).toBe(401);
+
+      const restore = installFakeFacets(instance, {
+        get() {
+          return {
+            fetch: async () => new Response("ok", { status: 200 }),
+            __supervisorPing: async () => {},
+            __verifySignature: verifyLinearHmac
+          };
+        },
+        abort: () => {},
+        delete: () => {}
+      });
+
+      try {
+        const res = await (
+          instance as never as {
+            handleWebhookDelivery: (
+              userId: string,
+              id: string,
+              body: ArrayBuffer,
+              headers: Record<string, string>
+            ) => Promise<{ status: number; body: string }>;
+          }
+        ).handleWebhookDelivery(
+          "wh-nosig",
+          syncId,
+          body.buffer as ArrayBuffer,
+          {}
+        );
+        expect(res.status).toBe(401);
+
+        const sql = (
+          instance as never as { sql: (...a: unknown[]) => unknown }
+        ).sql.bind(instance) as never;
+        const errors = listSyncErrors(sql, syncId, 10);
+        expect(errors).toHaveLength(1);
+        expect(errors[0].error_message).toBe(
+          "signature verification rejected by handler"
+        );
+        expect(errors[0].handler_version).toBe(1);
+      } finally {
+        restore();
+      }
     });
   });
 
@@ -192,22 +253,52 @@ describe("handleWebhookDelivery", () => {
         new TextEncoder().encode("other"),
         WEBHOOK_SECRET
       );
-      const res = await (
-        instance as never as {
-          handleWebhookDelivery: (
-            userId: string,
-            id: string,
-            body: ArrayBuffer,
-            sig: string | null
-          ) => Promise<{ status: number; body: string }>;
-        }
-      ).handleWebhookDelivery(
-        "wh-badsig",
-        syncId,
-        body.buffer as ArrayBuffer,
-        wrongSig
-      );
-      expect(res.status).toBe(401);
+
+      const restore = installFakeFacets(instance, {
+        get() {
+          return {
+            fetch: async () => new Response("ok", { status: 200 }),
+            __supervisorPing: async () => {},
+            __verifySignature: verifyLinearHmac
+          };
+        },
+        abort: () => {},
+        delete: () => {}
+      });
+
+      try {
+        const res = await (
+          instance as never as {
+            handleWebhookDelivery: (
+              userId: string,
+              id: string,
+              body: ArrayBuffer,
+              headers: Record<string, string>
+            ) => Promise<{ status: number; body: string }>;
+          }
+        ).handleWebhookDelivery(
+          "wh-badsig",
+          syncId,
+          body.buffer as ArrayBuffer,
+          {
+            "linear-signature": wrongSig,
+            "content-type": "application/json"
+          }
+        );
+        expect(res.status).toBe(401);
+
+        const sql = (
+          instance as never as { sql: (...a: unknown[]) => unknown }
+        ).sql.bind(instance) as never;
+        const errors = listSyncErrors(sql, syncId, 10);
+        expect(errors).toHaveLength(1);
+        expect(errors[0].error_message).toBe(
+          "signature verification rejected by handler"
+        );
+        expect(errors[0].handler_version).toBe(1);
+      } finally {
+        restore();
+      }
     });
   });
 
@@ -227,7 +318,8 @@ describe("handleWebhookDelivery", () => {
             fetch: async () => {
               throw new Error("kaboom: cannot read undefined.team");
             },
-            __supervisorPing: async () => {}
+            __supervisorPing: async () => {},
+            __verifySignature: verifyLinearHmac
           };
         },
         abort: () => {},
@@ -241,14 +333,14 @@ describe("handleWebhookDelivery", () => {
               userId: string,
               id: string,
               body: ArrayBuffer,
-              sig: string | null
+              headers: Record<string, string>
             ) => Promise<{ status: number; body: string }>;
           }
         ).handleWebhookDelivery(
           "wh-throws",
           syncId,
           body.buffer as ArrayBuffer,
-          sig
+          { "linear-signature": sig, "content-type": "application/json" }
         );
         expect(res.status).toBe(500);
 
@@ -280,7 +372,8 @@ describe("handleWebhookDelivery", () => {
         get() {
           return {
             fetch: async () => new Response("boom", { status: 500 }),
-            __supervisorPing: async () => {}
+            __supervisorPing: async () => {},
+            __verifySignature: verifyLinearHmac
           };
         },
         abort: () => {},
@@ -294,14 +387,14 @@ describe("handleWebhookDelivery", () => {
               userId: string,
               id: string,
               body: ArrayBuffer,
-              sig: string | null
+              headers: Record<string, string>
             ) => Promise<{ status: number; body: string }>;
           }
         ).handleWebhookDelivery(
           "wh-facet500",
           syncId,
           body.buffer as ArrayBuffer,
-          sig
+          { "linear-signature": sig, "content-type": "application/json" }
         );
         expect(res.status).toBe(500);
         const sql = (
@@ -334,7 +427,8 @@ describe("POST /webhook/:userId/:syncId (end-to-end)", () => {
         get() {
           return {
             fetch: async () => new Response("ok", { status: 200 }),
-            __supervisorPing: async () => {}
+            __supervisorPing: async () => {},
+            __verifySignature: verifyLinearHmac
           };
         },
         abort: () => {},
