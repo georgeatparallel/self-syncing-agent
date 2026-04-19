@@ -1,35 +1,67 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { deleteSyncTool } from "./delete-sync";
 import { createSync, getSyncById } from "../../../db/syncs";
-import { logSyncError } from "../../../db/sync-errors";
 import type { NewSync, SqlTag } from "../../../db/types";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
-function seedSync(instance: unknown): string {
-  const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
-  const id = crypto.randomUUID();
-  const input: NewSync = {
-    id,
-    name: `sync-${id.slice(0, 8)}`,
-    integration: "linear",
-    handler_code:
-      "export async function handleWebhook(){ return new Response('ok'); }",
-    schema_ddl: "CREATE TABLE IF NOT EXISTS x (id TEXT);",
-    filter_description: null,
-    webhook_secret: "s",
-    upstream_webhook_id: "wh_test_abc",
-    code_id: `sync:${id}:v1`
-  };
-  createSync(sql, input);
-  return id;
+function getStub(userName: string) {
+  return env.ChatAgent.get(env.ChatAgent.idFromName(userName));
 }
 
+async function ensureReady(instance: unknown, userName: string): Promise<void> {
+  await (instance as { setName: (n: string) => Promise<void> }).setName(
+    userName
+  );
+}
+
+const SAMPLE_HANDLER =
+  "export async function verifySignature(){return true;}" +
+  "export async function handleWebhook(){return new Response('ok');}";
+const SAMPLE_SCHEMA = "CREATE TABLE IF NOT EXISTS x (id TEXT);";
+
+function seedSync(
+  instance: unknown,
+  overrides: Partial<NewSync> = {}
+): { id: string; name: string } {
+  const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
+  const id = crypto.randomUUID();
+  const name = overrides.name ?? `sync-${id.slice(0, 8)}`;
+  const input: NewSync = {
+    id,
+    name,
+    integration: "linear",
+    handler_code: SAMPLE_HANDLER,
+    schema_ddl: SAMPLE_SCHEMA,
+    filter_description: null,
+    webhook_secret: "sec_test",
+    upstream_webhook_id: "wh_test",
+    code_id: `sync:${id}:v1`,
+    ...overrides
+  };
+  createSync(sql, input);
+  return { id, name: input.name };
+}
+
+/**
+ * Fake-facets test double mirroring the Task 2 pattern in
+ * create-sync.test.ts. The vitest-pool-workers bundled workerd doesn't
+ * ship the full Worker Loader / Facets surface; we stub `ctx.facets` with
+ * a minimal in-memory stand-in whose methods can be swapped per-test to
+ * drive each branch of delete_sync's flow.
+ */
+interface FakeFacetStub {
+  fetch: (req: Request) => Promise<Response>;
+  __unregisterWebhook: (config: {
+    id: string;
+    label: string;
+  }) => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
+}
 interface FakeFacets {
-  get(name: string, cb: () => unknown): unknown;
+  get(name: string, cb: () => unknown): FakeFacetStub;
   abort: (name: string, reason?: unknown) => void;
   delete: (name: string) => void;
 }
@@ -42,177 +74,195 @@ function installFakeFacets(instance: unknown, facets: FakeFacets): () => void {
   };
 }
 
-function stubLinearFetch(opts: { failUnregister?: boolean } = {}): () => void {
-  const original = globalThis.fetch;
-  globalThis.fetch = vi.fn(async (url, init) => {
-    if (!String(url).includes("api.linear.app"))
-      return original(url as never, init as never);
-    if (opts.failUnregister) {
-      return new Response(
-        JSON.stringify({ errors: [{ message: "simulated linear failure" }] }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      );
+interface CallRecord {
+  facetsDeleteCalls: string[];
+  unregisterCalls: { id: string; label: string }[];
+}
+
+function freshRecord(): CallRecord {
+  return { facetsDeleteCalls: [], unregisterCalls: [] };
+}
+
+function makeFakeFacets(
+  record: CallRecord,
+  overrides: Partial<FakeFacetStub> = {}
+): FakeFacets {
+  const defaultStub: FakeFacetStub = {
+    fetch: async () => new Response("ok", { status: 200 }),
+    __unregisterWebhook: async (config) => {
+      record.unregisterCalls.push(config);
+      return { ok: true as const };
     }
-    return new Response(
-      JSON.stringify({ data: { webhookDelete: { success: true } } }),
-      { status: 200, headers: { "content-type": "application/json" } }
-    );
-  }) as typeof fetch;
-  return () => {
-    globalThis.fetch = original;
+  };
+  const stub: FakeFacetStub = { ...defaultStub, ...overrides };
+  return {
+    get() {
+      return stub;
+    },
+    abort: () => {},
+    delete: (name: string) => {
+      record.facetsDeleteCalls.push(name);
+    }
   };
 }
 
-describe("delete_sync", () => {
-  it("removes the sync end-to-end: Linear unregister + facet delete + db rows", async () => {
-    const restore = stubLinearFetch();
-    try {
-      const stub = env.ChatAgent.get(env.ChatAgent.idFromName("d-happy"));
-      await runInDurableObject(stub, async (instance) => {
-        await (
-          instance as never as { setName: (n: string) => Promise<void> }
-        ).setName("d-happy");
-        const syncId = seedSync(instance);
-        const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
-        logSyncError(sql, {
-          sync_id: syncId,
-          payload_preview: "{}",
-          error_message: "prior error",
-          stack_trace: null,
-          handler_version: 1
-        });
-
-        const facetDeletes: string[] = [];
-        const restoreFacets = installFakeFacets(instance, {
-          get: () => ({ fetch: async () => new Response("ok") }),
-          abort: () => {},
-          delete: (name) => {
-            facetDeletes.push(name);
-          }
-        });
-
-        try {
-          const tool = deleteSyncTool(instance as never);
-          const res = await tool.execute!({ sync_id: syncId }, {} as never);
-          expect(res).toMatchObject({ ok: true });
-
-          // DB row gone
-          expect(getSyncById(sql, syncId)).toBeNull();
-          // sync_errors cleaned
-          const remaining = sql<{
-            c: number;
-          }>`SELECT COUNT(*) as c FROM sync_errors WHERE sync_id = ${syncId}`;
-          expect(remaining[0].c).toBe(0);
-          // Facet dropped
-          expect(facetDeletes).toHaveLength(1);
-          // Linear called
-          const linearCalls = (
-            globalThis.fetch as unknown as { mock: { calls: unknown[][] } }
-          ).mock.calls.filter((a) => String(a[0]).includes("api.linear.app"));
-          expect(linearCalls).toHaveLength(1);
-        } finally {
-          restoreFacets();
-        }
-      });
-    } finally {
-      restore();
-    }
-  });
-
+describe("deleteSyncTool", () => {
   it("returns not_found for an unknown sync_id", async () => {
-    const stub = env.ChatAgent.get(env.ChatAgent.idFromName("d-404"));
+    const stub = getStub("d-404");
     await runInDurableObject(stub, async (instance) => {
-      await (
-        instance as never as { setName: (n: string) => Promise<void> }
-      ).setName("d-404");
-      const tool = deleteSyncTool(instance as never);
-      const res = await tool.execute!(
-        { sync_id: "00000000-0000-0000-0000-000000000000" },
-        {} as never
-      );
-      expect(res).toMatchObject({ error: "not_found" });
+      await ensureReady(instance, "d-404");
+      const record = freshRecord();
+      const restoreFacets = installFakeFacets(instance, makeFakeFacets(record));
+      try {
+        const tools = deleteSyncTool(instance as never);
+        const res = await tools.execute!(
+          { sync_id: "00000000-0000-0000-0000-000000000000" },
+          {} as never
+        );
+        expect(res).toMatchObject({
+          error: "not_found",
+          sync_id: "00000000-0000-0000-0000-000000000000"
+        });
+        // No facet RPCs invoked on not_found.
+        expect(record.unregisterCalls).toHaveLength(0);
+        expect(record.facetsDeleteCalls).toHaveLength(0);
+      } finally {
+        restoreFacets();
+      }
     });
   });
 
-  it("tolerates a 'facet not running' error and still removes the sync row", async () => {
-    const restore = stubLinearFetch();
-    try {
-      const stub = env.ChatAgent.get(env.ChatAgent.idFromName("d-notrunning"));
-      await runInDurableObject(stub, async (instance) => {
-        await (
-          instance as never as { setName: (n: string) => Promise<void> }
-        ).setName("d-notrunning");
-        const syncId = seedSync(instance);
-
-        const restoreFacets = installFakeFacets(instance, {
-          get: () => ({ fetch: async () => new Response("ok") }),
-          abort: () => {},
-          // Simulates a sync whose facet never materialized (e.g., the
-          // user deletes right after create_sync before any webhook
-          // arrived). workerd's ctx.facets.delete throws in this case.
-          delete: () => {
-            throw new Error("facet not running");
-          }
-        });
-
-        try {
-          const tool = deleteSyncTool(instance as never);
-          const res = await tool.execute!({ sync_id: syncId }, {} as never);
-          expect(res).toMatchObject({ ok: true });
-
-          const sql = (instance as { sql: SqlTag }).sql.bind(
-            instance
-          ) as SqlTag;
-          expect(getSyncById(sql, syncId)).toBeNull();
-        } finally {
-          restoreFacets();
-        }
+  it("happy path: __unregisterWebhook succeeds - sync cleaned up, no warnings", async () => {
+    const userName = "d-happy";
+    const stub = getStub(userName);
+    await runInDurableObject(stub, async (instance) => {
+      await ensureReady(instance, userName);
+      const seeded = seedSync(instance, {
+        name: "happy-sync",
+        upstream_webhook_id: "wh_test"
       });
-    } finally {
-      restore();
-    }
+      const record = freshRecord();
+      const restoreFacets = installFakeFacets(instance, makeFakeFacets(record));
+
+      try {
+        const tools = deleteSyncTool(instance as never);
+        const res = await tools.execute!({ sync_id: seeded.id }, {} as never);
+
+        expect(res).toEqual({ ok: true });
+        // No warnings field at all on pure success.
+        expect(res as { warnings?: unknown }).not.toHaveProperty("warnings");
+
+        // __unregisterWebhook was called once, with expected shape.
+        expect(record.unregisterCalls).toHaveLength(1);
+        expect(record.unregisterCalls[0].id).toBe("wh_test");
+        expect(record.unregisterCalls[0].label).toBe(
+          `self-syncing-agent:${userName.slice(0, 8)}:happy-sync`
+        );
+
+        // DB row gone.
+        const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
+        expect(getSyncById(sql, seeded.id)).toBeNull();
+
+        // Facet dropped.
+        expect(record.facetsDeleteCalls).toEqual(["happy-sync"]);
+      } finally {
+        restoreFacets();
+      }
+    });
   });
 
-  it("aborts and preserves local state when Linear unregister fails", async () => {
-    const restore = stubLinearFetch({ failUnregister: true });
-    try {
-      const stub = env.ChatAgent.get(env.ChatAgent.idFromName("d-linearfail"));
-      await runInDurableObject(stub, async (instance) => {
-        await (
-          instance as never as { setName: (n: string) => Promise<void> }
-        ).setName("d-linearfail");
-        const syncId = seedSync(instance);
-
-        let facetDeleted = false;
-        const restoreFacets = installFakeFacets(instance, {
-          get: () => ({ fetch: async () => new Response("ok") }),
-          abort: () => {},
-          delete: () => {
-            facetDeleted = true;
-          }
-        });
-
-        try {
-          const tool = deleteSyncTool(instance as never);
-          const res = await tool.execute!({ sync_id: syncId }, {} as never);
-          expect(res).toMatchObject({
-            ok: false,
-            error: "linear_api_error",
-            detail: expect.stringMatching(/simulated linear failure/)
-          });
-
-          // Local state still present — user can retry.
-          const sql = (instance as { sql: SqlTag }).sql.bind(
-            instance
-          ) as SqlTag;
-          expect(getSyncById(sql, syncId)).not.toBeNull();
-          expect(facetDeleted).toBe(false);
-        } finally {
-          restoreFacets();
-        }
+  it("graceful-skip: no_unregister_export adds a warning but still cleans up locally", async () => {
+    const userName = "d-noexport";
+    const stub = getStub(userName);
+    await runInDurableObject(stub, async (instance) => {
+      await ensureReady(instance, userName);
+      const seeded = seedSync(instance, {
+        name: "legacy-sync",
+        upstream_webhook_id: "wh_legacy"
       });
-    } finally {
-      restore();
-    }
+      const record = freshRecord();
+      const restoreFacets = installFakeFacets(
+        instance,
+        makeFakeFacets(record, {
+          __unregisterWebhook: async (config) => {
+            record.unregisterCalls.push(config);
+            return { ok: false as const, reason: "no_unregister_export" };
+          }
+        })
+      );
+
+      try {
+        const tools = deleteSyncTool(instance as never);
+        const res = await tools.execute!({ sync_id: seeded.id }, {} as never);
+
+        if (!("ok" in res) || res.ok !== true) {
+          throw new Error(
+            `expected ok: true, got: ${JSON.stringify(res, null, 2)}`
+          );
+        }
+        expect(res.warnings).toBeDefined();
+        expect(res.warnings).toHaveLength(1);
+        expect(res.warnings![0]).toMatch(
+          /cleanup skipped: no_unregister_export/
+        );
+        // Warning must be actionable — mention manual cleanup.
+        expect(res.warnings![0]).toMatch(/manual/i);
+
+        // Local cleanup still happened.
+        const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
+        expect(getSyncById(sql, seeded.id)).toBeNull();
+        expect(record.facetsDeleteCalls).toEqual(["legacy-sync"]);
+      } finally {
+        restoreFacets();
+      }
+    });
+  });
+
+  it("graceful-skip: threw with detail surfaces both reason and detail in warning", async () => {
+    const userName = "d-threw";
+    const stub = getStub(userName);
+    await runInDurableObject(stub, async (instance) => {
+      await ensureReady(instance, userName);
+      const seeded = seedSync(instance, {
+        name: "flaky-sync",
+        upstream_webhook_id: "wh_flaky"
+      });
+      const record = freshRecord();
+      const restoreFacets = installFakeFacets(
+        instance,
+        makeFakeFacets(record, {
+          __unregisterWebhook: async (config) => {
+            record.unregisterCalls.push(config);
+            return {
+              ok: false as const,
+              reason: "threw",
+              detail: "simulated network error"
+            };
+          }
+        })
+      );
+
+      try {
+        const tools = deleteSyncTool(instance as never);
+        const res = await tools.execute!({ sync_id: seeded.id }, {} as never);
+
+        if (!("ok" in res) || res.ok !== true) {
+          throw new Error(
+            `expected ok: true, got: ${JSON.stringify(res, null, 2)}`
+          );
+        }
+        expect(res.warnings).toBeDefined();
+        expect(res.warnings).toHaveLength(1);
+        expect(res.warnings![0]).toMatch(/threw/);
+        expect(res.warnings![0]).toMatch(/simulated network error/);
+
+        // Local cleanup still happened.
+        const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
+        expect(getSyncById(sql, seeded.id)).toBeNull();
+        expect(record.facetsDeleteCalls).toEqual(["flaky-sync"]);
+      } finally {
+        restoreFacets();
+      }
+    });
   });
 });

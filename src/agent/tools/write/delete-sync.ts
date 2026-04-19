@@ -1,11 +1,18 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { getSyncById, deleteSync } from "../../../db/syncs";
-import {
-  unregisterLinearWebhook,
-  LinearApiError
-} from "../../../integrations/linear-api";
+import { attachFacet } from "../../../facet/loader";
 import type { ChatAgent } from "../../../server";
+
+// Typed RPC surface for the facet's Phase D unregister method. The cast is
+// local to this file — matches the pattern used in create-sync.ts for facet
+// RPCs that aren't on the generic DurableObjectStub type.
+interface FacetUnregisterRpc {
+  __unregisterWebhook(config: {
+    id: string;
+    label: string;
+  }): Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
+}
 
 export function deleteSyncTool(agent: ChatAgent) {
   return tool({
@@ -18,7 +25,7 @@ export function deleteSyncTool(agent: ChatAgent) {
     execute: async ({
       sync_id
     }): Promise<
-      | { ok: true }
+      | { ok: true; warnings?: string[] }
       | { ok: false; error: string; detail: string }
       | { error: "not_found"; sync_id: string }
     > => {
@@ -26,32 +33,50 @@ export function deleteSyncTool(agent: ChatAgent) {
       const sync = getSyncById(sql, sync_id);
       if (!sync) return { error: "not_found", sync_id };
 
-      // 1. Unregister upstream webhook (network-touching, may fail).
-      //    Skip gracefully if the row somehow has no upstream id.
+      const warnings: string[] = [];
+
+      // 1. Delegate upstream webhook cleanup to the handler's
+      //    unregisterWebhook export. Graceful-skip: if the export is missing
+      //    (legacy sync from pre-Phase-D) or the handler throws, surface a
+      //    warning to the user and proceed with local cleanup. The user ran
+      //    delete_sync because they want this sync gone — a network failure
+      //    or missing export shouldn't leave them with a half-deleted sync.
+      //    The warning includes guidance to clean up upstream manually.
       if (sync.upstream_webhook_id) {
-        try {
-          await unregisterLinearWebhook(
-            agent.env.LINEAR_ACCESS_TOKEN,
-            sync.upstream_webhook_id
+        const label = `self-syncing-agent:${agent.name.slice(0, 8)}:${sync.name}`;
+        const facet = attachFacet(
+          agent.env,
+          agent.ctx.facets,
+          sync,
+          agent.name
+        ) as unknown as FacetUnregisterRpc;
+        const unregResult = await facet.__unregisterWebhook({
+          id: sync.upstream_webhook_id,
+          label
+        });
+        if (!unregResult.ok) {
+          const detailPart =
+            "detail" in unregResult && unregResult.detail
+              ? ` (${unregResult.detail})`
+              : "";
+          warnings.push(
+            `Upstream webhook cleanup skipped: ${unregResult.reason}${detailPart}. ` +
+              `The sync was deleted locally but the upstream webhook may still be registered — ` +
+              `clean it up manually in the upstream's dashboard if you want to remove it fully.`
           );
-        } catch (e) {
-          if (e instanceof LinearApiError) {
-            return { ok: false, error: e.code, detail: e.message };
-          }
-          throw e;
         }
       }
 
-      // 2. Drop the facet and its SQLite. Unlike create_sync, once this
-      //    runs there's no rollback path — we'd need the old bundle
-      //    bytes to re-attach. Order matters: Linear first (reversible
-      //    via re-register if we kept the URL), facet second.
+      // 2. Drop the facet and its SQLite. No rollback path once this runs —
+      //    we'd need the old bundle bytes to re-attach. Order matters:
+      //    upstream first (reversible by re-register if we kept the URL),
+      //    facet second.
       try {
         agent.ctx.facets.delete(sync.name);
       } catch (e) {
         // ctx.facets.delete throws if the facet never started; tolerate
-        // that case so a sync whose facet never materialized can still
-        // be removed from the registry.
+        // that case so a sync whose facet never materialized can still be
+        // removed from the registry.
         if (
           !(e instanceof Error) ||
           !/not running|no such facet/i.test(e.message)
@@ -68,7 +93,7 @@ export function deleteSyncTool(agent: ChatAgent) {
       sql`DELETE FROM sync_errors WHERE sync_id = ${sync_id}`;
       deleteSync(sql, sync_id);
 
-      return { ok: true };
+      return warnings.length > 0 ? { ok: true, warnings } : { ok: true };
     }
   });
 }
