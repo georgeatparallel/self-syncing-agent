@@ -46,10 +46,12 @@ Two deliverables, one plan:
    - Wait for propagation (usually 5-30 min).
 
 2. **Add Worker custom domain.** In `wrangler.jsonc` add:
+
    ```jsonc
    "workers_dev": false,
    "routes": [{ "pattern": "sauna.ronit.one", "custom_domain": true }]
    ```
+
    Redeploy: `npx wrangler deploy`. Cloudflare auto-creates the DNS record + TLS cert.
 
 3. **Configure Cloudflare Access:**
@@ -181,7 +183,10 @@ import { describe, it, expect } from "vitest";
 import { Hono } from "hono";
 import { requireAuth, requireAuthAndUserIdMatch } from "./middleware";
 
-type Env = { Bindings: { DEV_FALLBACK_USER?: string }; Variables: { userId: string } };
+type Env = {
+  Bindings: { DEV_FALLBACK_USER?: string };
+  Variables: { userId: string };
+};
 
 function makeApp() {
   const app = new Hono<Env>();
@@ -260,9 +265,7 @@ Add `GET /api/auth/me`:
 ```ts
 import { requireAuth, requireAuthAndUserIdMatch } from "./auth/middleware";
 
-app.get("/api/auth/me", requireAuth, (c) =>
-  c.json({ userId: c.var.userId })
-);
+app.get("/api/auth/me", requireAuth, (c) => c.json({ userId: c.var.userId }));
 ```
 
 Wrap existing `/api/user/:userId/*` routes:
@@ -333,7 +336,11 @@ git commit -m "feat(auth): Cloudflare Access middleware + protect /api/user/:use
 
 ```json
 {
-  "github": ["api.github.com", "uploads.github.com", "raw.githubusercontent.com"],
+  "github": [
+    "api.github.com",
+    "uploads.github.com",
+    "raw.githubusercontent.com"
+  ],
   "linear": ["api.linear.app"],
   "slack": ["slack.com", "hooks.slack.com"],
   "notion": ["api.notion.com"],
@@ -387,7 +394,7 @@ const PRIVATE_IPV4_CIDRS: Array<[number, number]> = [
   [0x0a000000, 0xff000000], // 10/8
   [0xac100000, 0xfff00000], // 172.16/12
   [0xc0a80000, 0xffff0000], // 192.168/16
-  [0xa9fe0000, 0xffff0000]  // 169.254/16 — link-local incl. AWS/GCP metadata
+  [0xa9fe0000, 0xffff0000] // 169.254/16 — link-local incl. AWS/GCP metadata
 ];
 
 function ipv4ToUint32(hostname: string): number | null {
@@ -455,7 +462,7 @@ export interface ConnectedAccount {
   app_slug: string;
   account_id: string;
   connected_at: number;
-  api_hosts: string[];  // NEW
+  api_hosts: string[]; // NEW
 }
 
 // Similar on Sync interface — add api_hosts: string[].
@@ -479,7 +486,10 @@ export function upsertConnectedAccount(
   `;
 }
 
-export function listConnectedAccounts(sql: SqlTag, user_id: string): ConnectedAccount[] {
+export function listConnectedAccounts(
+  sql: SqlTag,
+  user_id: string
+): ConnectedAccount[] {
   const rows = sql<ConnectedAccount & { api_hosts: string }>`
     SELECT * FROM connected_accounts WHERE user_id = ${user_id}
   `;
@@ -630,7 +640,9 @@ import { isDeniedHost } from "../pipedream/app-hosts";
 import { proxiedFetch } from "../pipedream/proxy";
 import { getCachedAccessToken } from "../pipedream/token-cache";
 
-export interface HttpGatewayProps { userId?: string; }
+export interface HttpGatewayProps {
+  userId?: string;
+}
 type Forwarder = (r: Request) => Promise<Response>;
 
 export type EgressLookup = (
@@ -658,17 +670,18 @@ export async function handleGatewayRequest(
       JSON.stringify({
         error: "denied_host",
         host,
-        message: "Host is on the SSRF denylist (private IP, loopback, cloud metadata, or *.internal/*.local)."
+        message:
+          "Host is on the SSRF denylist (private IP, loopback, cloud metadata, or *.internal/*.local)."
       }),
       { status: 403, headers: { "content-type": "application/json" } }
     );
   }
 
   if (!props.userId || !options.egressLookup) {
-    return new Response(
-      JSON.stringify({ error: "no_user_context", host }),
-      { status: 403, headers: { "content-type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: "no_user_context", host }), {
+      status: 403,
+      headers: { "content-type": "application/json" }
+    });
   }
 
   const resolved = await options.egressLookup(props.userId, host);
@@ -698,15 +711,21 @@ export async function handleGatewayRequest(
 export class HttpGateway extends WorkerEntrypoint<Env, HttpGatewayProps> {
   async fetch(request: Request): Promise<Response> {
     const egressLookup: EgressLookup = async (userId, hostname) => {
-      const stub = this.env.ChatAgent.get(this.env.ChatAgent.idFromName(userId));
-      return (stub as unknown as {
-        resolveEgressAccount: (
-          u: string,
-          h: string
-        ) => Promise<{ accountId: string; appSlug: string } | null>;
-      }).resolveEgressAccount(userId, hostname);
+      const stub = this.env.ChatAgent.get(
+        this.env.ChatAgent.idFromName(userId)
+      );
+      return (
+        stub as unknown as {
+          resolveEgressAccount: (
+            u: string,
+            h: string
+          ) => Promise<{ accountId: string; appSlug: string } | null>;
+        }
+      ).resolveEgressAccount(userId, hostname);
     };
-    return handleGatewayRequest(request, this.env, this.ctx.props, { egressLookup });
+    return handleGatewayRequest(request, this.env, this.ctx.props, {
+      egressLookup
+    });
   }
 }
 ```
@@ -745,12 +764,11 @@ git commit -m "feat(gateway): DB-backed egress resolution + SSRF denylist"
 `create_sync`:
 
 ```ts
-api_hosts: z
-  .array(z.string().min(1))
+api_hosts: z.array(z.string().min(1))
   .optional()
   .describe(
     "Additional hostnames your handler code needs to fetch, beyond what's already in the connected account's default catalog. Example: ['api.stripe.com'] if the handler calls fetch('https://api.stripe.com/v1/webhook_endpoints'). Use fetch_docs on the upstream's API reference to discover the hosts. Over-declaring is fine; under-declaring 403s at the gateway."
-  )
+  );
 ```
 
 `update_sync` gets the same field (optional; omit to preserve existing).
@@ -858,7 +876,7 @@ Hit `https://sauna.ronit.one` in a fresh incognito. Expect Cloudflare's Access s
 While signed in as `me@domain.com`, open browser devtools, run:
 
 ```js
-fetch("/api/user/someone-else@domain.com/syncs-summary").then(r => r.status)
+fetch("/api/user/someone-else@domain.com/syncs-summary").then((r) => r.status);
 ```
 
 Expect 403 (user_id_mismatch).

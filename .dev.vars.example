@@ -6,3 +6,4 @@ PIPEDREAM_CLIENT_ID=<your-pipedream-client-id>
 PIPEDREAM_CLIENT_SECRET=<your-pipedream-client-secret>
 PIPEDREAM_ENVIRONMENT=development
 FIRECRAWL_API_KEY=<your-firecrawl-api-key>
+DEV_FALLBACK_USER=pandaronit25@gmail.com
