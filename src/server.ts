@@ -25,7 +25,6 @@ import {
 import type { ConnectedAccount } from "./db/types";
 import { getCachedAccessToken, createConnectToken } from "./pipedream";
 import { attachFacet } from "./facet/loader";
-import { verifyLinearSignature } from "./webhook/hmac";
 
 export { HttpGateway } from "./proxy/http-gateway";
 export { LLMGateway } from "./agent-runtime/llm-gateway";
@@ -127,7 +126,7 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
     userId: string,
     syncId: string,
     bodyBytes: ArrayBuffer,
-    signatureHex: string | null
+    headers: Record<string, string>
   ): Promise<{ status: number; body: string }> {
     await this.setName(userId);
     this.#ensureSchema();
@@ -136,25 +135,51 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
     if (!sync) return { status: 404, body: "sync not found" };
 
     const body = new Uint8Array(bodyBytes);
-    if (
-      !signatureHex ||
-      !(await verifyLinearSignature(body, signatureHex, sync.webhook_secret))
-    ) {
-      return { status: 401, body: "invalid signature" };
-    }
 
+    // Attach the facet before the signature check — verifySignature lives
+    // inside handler.js and needs the facet isolate running. Worker Loader
+    // caches the compiled bundle, so invalid-signature deliveries pay the
+    // compilation cost once per facet lifetime (cheap), not per delivery.
     const facet = attachFacet(this.env, this.ctx.facets, sync, userId);
 
-    // Rebuild a minimal Request for the facet. Agent handlers read the
-    // body via request.json(); headers beyond content-type are not part
-    // of the documented handler contract.
-    const facetRequest = new Request("https://facet.internal/webhook", {
-      method: "POST",
-      body: body,
-      headers: { "content-type": "application/json" }
-    });
-
     try {
+      // Signature verification is delegated to the handler's verifySignature
+      // export via the facet wrapper's __verifySignature RPC. Missing export
+      // or thrown error → false → 401. See src/facet/wrapper.ts for contract.
+      const verifyResult = await (
+        facet as unknown as {
+          __verifySignature(
+            body: Uint8Array,
+            headers: Record<string, string>,
+            secret: string
+          ): Promise<boolean>;
+        }
+      ).__verifySignature(body, headers, sync.webhook_secret);
+      if (!verifyResult) {
+        // Log the rejection so accumulated 401s are visible in sync_errors
+        // (with occurred_at timestamps) — the agent's 401-triage rubric in
+        // the system prompt relies on this. Pre-Phase-C, 401 was an early
+        // return that skipped logging ("nothing new for the sidebar"); that
+        // changes here because a 401 now almost certainly means the agent's
+        // verifySignature is buggy, which the agent must be able to see.
+        logSyncError(sql, {
+          sync_id: sync.id,
+          payload_preview: payloadPreview(body),
+          error_message: "signature verification rejected by handler",
+          stack_trace: null,
+          handler_version: sync.version
+        });
+        return { status: 401, body: "invalid signature" };
+      }
+
+      // Rebuild a minimal Request for the facet. Agent handlers read the
+      // body via request.json(); headers beyond content-type are not part
+      // of the documented handler contract.
+      const facetRequest = new Request("https://facet.internal/webhook", {
+        method: "POST",
+        body: body,
+        headers: { "content-type": "application/json" }
+      });
       const facetResponse = await facet.fetch(facetRequest);
       if (facetResponse.status >= 500) {
         logSyncError(sql, {
@@ -186,11 +211,11 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
       });
       return { status: 500, body: "handler failed" };
     } finally {
-      // Fires on 2xx (row written), 5xx (error logged), and throw (error
-      // logged). Intentionally skipped for signature-invalid (401) and
-      // sync-not-found (404) early returns above — those paths neither
-      // mutate state nor log an error, so there's nothing new for the
-      // sidebar to display.
+      // Fires on every non-404 path (2xx, 401, 5xx, throw) — all of which
+      // log something actionable (the 200 path bumps updated_at via
+      // touchSyncUpdatedAt; the 401/5xx/throw paths write a sync_errors
+      // row). 404 early-returns before the try, so it still skips the bump
+      // — nothing changed for that path and no row was touched.
       this.#bumpChangeTick();
     }
   }
@@ -468,12 +493,18 @@ app.post("/webhook/:userId/:syncId", async (c) => {
   const { userId, syncId } = c.req.param();
   const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
   const bodyBytes = await c.req.arrayBuffer();
-  const signatureHex = c.req.header("linear-signature") ?? null;
+  // Pass all request headers through (lowercased keys) so the handler's
+  // verifySignature export can read whatever header its upstream uses
+  // (linear-signature, x-hub-signature-256, x-slack-signature, etc.).
+  const headers: Record<string, string> = {};
+  c.req.raw.headers.forEach((value, key) => {
+    headers[key.toLowerCase()] = value;
+  });
   const result = await stub.handleWebhookDelivery(
     userId,
     syncId,
     bodyBytes,
-    signatureHex
+    headers
   );
   // `new Response` instead of `c.text(body, status)` because Hono's
   // helpers type `status` as its `StatusCode` union — our RPC return
