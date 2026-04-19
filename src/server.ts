@@ -24,11 +24,7 @@ import {
   getConnectedAccountBySlug
 } from "./db/connected-accounts";
 import type { ConnectedAccount } from "./db/types";
-import {
-  getCachedAccessToken,
-  createConnectToken,
-  listConnectApps
-} from "./pipedream";
+import { getCachedAccessToken, createConnectToken } from "./pipedream";
 import { attachFacet } from "./facet/loader";
 import { requireAuth, requireAuthAndUserIdMatch } from "./auth/middleware";
 import { matchesHost } from "./proxy/http-gateway";
@@ -625,27 +621,6 @@ app.get(
     return c.json({ accounts });
   }
 );
-
-// Full Pipedream Connect app catalog (~3000 apps). User-agnostic — gated
-// by requireAuth (no :userId param) to keep the authenticated-users-only
-// scoping consistent with the rest of the API surface, even though the
-// catalog itself is public. Module-level 24h cache lives in apps.ts; on
-// upstream failure with no cache, surfaces 503 catalog_unavailable so the
-// UI can render a degraded state.
-app.get("/api/pipedream/apps", requireAuth, async (c) => {
-  try {
-    const apps = await listConnectApps(c.env);
-    return c.json({ apps });
-  } catch (err) {
-    return c.json(
-      {
-        error: "catalog_unavailable",
-        message: err instanceof Error ? err.message : String(err)
-      },
-      503
-    );
-  }
-});
 
 // Fallthrough: everything else (chat WebSocket upgrade, MCP, etc.)
 // goes to the Agents SDK router.

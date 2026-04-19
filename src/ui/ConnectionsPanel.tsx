@@ -6,7 +6,7 @@ import {
   type ConnectError,
   type ConnectResult
 } from "@pipedream/sdk/browser";
-import type { AppEntry } from "../pipedream/apps";
+import type { AppEntry } from "../pipedream/app-types";
 import { useConnections, type ConnectionSummary } from "./useConnections";
 
 interface ConnectionsPanelProps {
@@ -33,7 +33,7 @@ export function ConnectionsPanel({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/pipedream/apps");
+        const res = await fetch("/pipedream-apps.json");
         if (!res.ok) throw new Error(`${res.status}`);
         const body = (await res.json()) as { apps: AppEntry[] };
         if (!cancelled) {
