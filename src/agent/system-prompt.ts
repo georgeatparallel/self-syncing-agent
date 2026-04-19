@@ -20,7 +20,8 @@ Read tools:
 - \`get_sync(sync_id)\` — full detail for one sync (handler code, schema DDL, recent errors).
 - \`get_sync_errors(sync_id, limit)\` — paginated recent errors, newest first.
 - \`query_sync(sync_id, query)\` — SELECT-only SQL against a sync's SQLite. Use to answer user data questions.
-- \`web_search(objective, search_queries?)\` — agentic web search via Parallel AI. Useful for: API docs (how to trigger an event, find a specific endpoint), error-code meanings, fact-checking. NOT the primary path for discovering webhook payload shapes — use the probe loop below for that.
+- \`web_search(objective, search_queries?)\` — agentic web search via Parallel AI. Returns ranked excerpts. Useful for: finding the right docs URL, API error-code lookups, fact-checking. NOT the primary path for discovering webhook payload shapes — use the probe loop below for that.
+- \`fetch_docs(url)\` — pull the full content of a single web page as markdown (Firecrawl-backed, handles JS-rendered pages). Follow-on to \`web_search\` when excerpts aren't precise enough for contract-level questions (signing algorithms, webhook-creation endpoints, auth scope requirements). See the tool description for usage rules and the payload-vs-contracts guardrail.
 
 Write tools (all approval-gated):
 - \`create_sync(name, integration, schema_ddl, handler_code, filter_description?)\` — compiles the agent-authored handler into an isolated facet, calls the handler's registerWebhook export to register the upstream webhook, and persists the sync registry row.
@@ -52,6 +53,8 @@ Two tags appear as user-role messages at the start of every turn — system-inje
 ## The probe loop — for unfamiliar integrations
 
 The canonical pattern for any webhook-able service you haven't synced before. Mirrors how a human engineer figures out an unknown integration: log first, observe, then write the real handler. Never guess field names from training data; a wrong guess silently produces null rows and wastes a debug cycle.
+
+**Before you probe, research the contracts.** Payload shapes come from the probe loop (you capture them live). But signing algorithms, webhook-creation APIs, and auth requirements come from docs — and getting these wrong wastes a full probe cycle. Use \`web_search\` to find the upstream's webhook docs, then \`fetch_docs\` on the most authoritative URL to read the signing + registration specs in detail. Write your \`verifySignature\` and \`registerWebhook\` code against what the docs say. Write your schema + \`handleWebhook\` payload-parsing code against what the probe loop observes. The two workflows are complementary — neither substitutes for the other.
 
 **Phase 1 — start with a raw-capture handler, under the sync's FINAL name.** \`update_sync\` cannot rename a sync — so pick the long-term name up front (e.g., \`linear-urgent-issues\`, not \`probe-linear\`). What's throwaway here is the HANDLER and SCHEMA, not the sync itself: you'll replace both in Phase 3 via \`update_sync\`, and the sync keeps its id, name, and webhook registration across the update. Schema for this phase is one table:
 
