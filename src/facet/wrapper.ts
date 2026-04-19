@@ -21,22 +21,37 @@
  *     approval gating on the tool side is the trust boundary, not this
  *     method. Returns { ok: true, rowsWritten, rowsRead } | { ok: false,
  *     error }; drains the cursor so side effects commit.
+ *   - __verifySignature(body, headers, secret): supervisor-only RPC that
+ *     delegates webhook-signature verification to the handler's own
+ *     verifySignature export. Signing schemes are per-integration (Linear
+ *     HMAC-hex, GitHub sha256=-prefixed, Slack v0:ts:body, etc.) and live
+ *     in agent-authored code, not here. Fail-closed: missing export or
+ *     thrown error → false → supervisor returns 401.
  *
- * The agent's handler.js contract: export a function
- *   `handleWebhook(request: Request, sql: SqlStorage, ctx?): Promise<Response>`
- * where `sql` is this.ctx.storage.sql (call sql.exec(query, ...args) and
- * sql.exec(query, ...args).toArray() for reads). The optional third `ctx`
- * arg provides `{ agent, waitUntil }`: `agent` is a preconfigured subagent
- * runner (built from this.env.LLM + an RpcTarget bridge to this facet's
- * sql/fetch/userId) that the handler can invoke to process the webhook
- * with an LLM; `waitUntil` forwards to this.ctx.waitUntil for background
- * work. Older handlers that take only (request, sql) continue to work —
- * JS ignores the extra arg.
+ * The agent's handler.js contract:
+ *
+ *   export async function handleWebhook(request, sql, ctx): Promise<Response>
+ *     — called for every verified webhook. `sql` is this.ctx.storage.sql
+ *       (call sql.exec(query, ...args) and sql.exec(query, ...args).toArray()
+ *       for reads). The optional third `ctx` arg provides `{ agent, waitUntil }`:
+ *       `agent` is a preconfigured subagent runner (built from this.env.LLM
+ *       + an RpcTarget bridge to this facet's sql/fetch/userId) that the
+ *       handler can invoke to process the webhook with an LLM; `waitUntil`
+ *       forwards to this.ctx.waitUntil for background work.
+ *
+ *   export async function verifySignature(body, headers, secret): Promise<boolean>
+ *     — REQUIRED. Called by the supervisor before handleWebhook. `body` is
+ *       a Uint8Array of the raw request body; `headers` is a
+ *       Record<string, string> with lowercased keys; `secret` is the
+ *       webhook_secret stored at create_sync time. Return true to accept
+ *       the delivery, false (or throw) to reject with 401. Missing export
+ *       → supervisor returns 401 (fail-closed).
  */
 export const FACET_WRAPPER_SOURCE = `
 import { DurableObject, RpcTarget } from "cloudflare:workers";
 import { SCHEMA_DDL } from "./schema.js";
 import { handleWebhook } from "./handler.js";
+import * as handlerModule from "./handler.js";
 import { createAgent } from "./agent.js";
 
 class FacetAgentBridge extends RpcTarget {
@@ -113,6 +128,17 @@ export class App extends DurableObject {
         ok: false,
         error: e instanceof Error ? e.message : String(e)
       };
+    }
+  }
+
+  async __verifySignature(body, headers, secret) {
+    if (typeof handlerModule.verifySignature !== "function") return false;
+    try {
+      const bodyBytes = body instanceof Uint8Array ? body : new Uint8Array(body);
+      const result = await handlerModule.verifySignature(bodyBytes, headers, secret);
+      return result === true;
+    } catch (e) {
+      return false;
     }
   }
 }
