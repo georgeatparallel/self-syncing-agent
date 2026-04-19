@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Surface, Text } from "@cloudflare/kumo";
 import { Combobox } from "@cloudflare/kumo/components/combobox";
 import {
@@ -28,6 +28,30 @@ export function ConnectionsPanel({
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(true);
+  const [query, setQuery] = useState("");
+
+  // Kumo's Combobox.List renders every item in `items` to the DOM (no
+  // virtualization). Passing ~3000 Pipedream apps causes the browser to
+  // choke/truncate the list. Filter client-side + cap at 50 so the DOM
+  // stays small regardless of catalog size.
+  const filteredApps = useMemo(() => {
+    if (apps.length === 0) return [];
+    const q = query.trim().toLowerCase();
+    if (q.length === 0) {
+      // Empty query: show the first 50 alphabetically so the dropdown
+      // isn't empty but also doesn't render thousands of DOM nodes.
+      // The JSON snapshot is already name-sorted; slice without
+      // re-sorting.
+      return apps.slice(0, 50);
+    }
+    return apps
+      .filter(
+        (a) =>
+          a.name.toLowerCase().includes(q) ||
+          a.name_slug.toLowerCase().includes(q)
+      )
+      .slice(0, 50);
+  }, [apps, query]);
 
   useEffect(() => {
     let cancelled = false;
@@ -169,11 +193,12 @@ export function ConnectionsPanel({
       <div className="flex items-center gap-2">
         <div className="flex-1">
           <Combobox
-            items={apps}
+            items={filteredApps}
             value={selectedApp}
             onValueChange={(v) => {
               if (typeof v === "string") setSelectedApp(v);
             }}
+            onInputValueChange={(v) => setQuery(v)}
             disabled={pending !== null || catalogLoading}
           >
             <Combobox.TriggerInput
