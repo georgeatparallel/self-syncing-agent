@@ -172,7 +172,40 @@ describe("createSyncTool", () => {
     await runInDurableObject(stub, async (instance) => {
       await ensureReady(instance, userName);
       const record = freshRecord();
-      const restoreFacets = installFakeFacets(instance, makeFakeFacets(record));
+      // Assert the INSERT-before-register ordering by peeking at the DB
+      // from inside the __registerWebhook mock. If the row isn't in SQL
+      // at that moment, the egress gateway's live resolveEgress RPC would
+      // 403 any handler fetch with sync_not_found. This pins the fix for
+      // that Phase F Task 3 regression.
+      let rowVisibleDuringRegister: {
+        webhook_secret: string;
+        upstream_webhook_id: string | null;
+        api_hosts: string[];
+      } | null = null;
+      const restoreFacets = installFakeFacets(
+        instance,
+        makeFakeFacets(record, {
+          __registerWebhook: async (config) => {
+            record.registerCalls.push(config);
+            const sql = instance.sql.bind(instance);
+            // Parse syncId out of the callbackUrl so we don't depend on
+            // closure-sharing the UUID with the tool.
+            const match = config.callbackUrl.match(
+              /\/webhook\/[^/]+\/([^/]+)$/
+            );
+            const sid = match?.[1] ?? "";
+            const row = getSyncById(sql, sid);
+            if (row) {
+              rowVisibleDuringRegister = {
+                webhook_secret: row.webhook_secret,
+                upstream_webhook_id: row.upstream_webhook_id,
+                api_hosts: row.api_hosts
+              };
+            }
+            return { id: "wh_test", secret: "sec_test" };
+          }
+        })
+      );
 
       try {
         const tools = createSyncTool(instance);
@@ -195,10 +228,18 @@ describe("createSyncTool", () => {
         expect(result.upstream_webhook_id).toBe("wh_test");
         expect(typeof result.sync_id).toBe("string");
 
+        // INSERT-before-registerWebhook ordering: the row was in SQL
+        // while __registerWebhook ran, and it carried empty-string
+        // placeholders for the fields that registerWebhook returns.
+        expect(rowVisibleDuringRegister).not.toBeNull();
+        expect(rowVisibleDuringRegister!.webhook_secret).toBe("");
+        expect(rowVisibleDuringRegister!.upstream_webhook_id).toBe("");
+
         const sql = instance.sql.bind(instance);
         const persisted = getSyncById(sql, result.sync_id);
         expect(persisted).not.toBeNull();
         expect(persisted!.name).toBe("linear-issues");
+        // After the post-register updateSync, the real values land.
         expect(persisted!.webhook_secret).toBe("sec_test");
         expect(persisted!.upstream_webhook_id).toBe("wh_test");
         expect(persisted!.version).toBe(1);
@@ -437,63 +478,33 @@ describe("createSyncTool", () => {
     });
   });
 
-  it("rolls back on persist failure: __unregisterWebhook called with just-registered id", async () => {
-    const stub = getStub("create-persist-fail");
-    const userName = "create-persist-fail";
+  it("rolls back on post-register updateSync failure: __unregisterWebhook called, row deleted", async () => {
+    const stub = getStub("create-update-fail");
+    const userName = "create-update-fail";
 
     await runInDurableObject(stub, async (instance) => {
       await ensureReady(instance, userName);
       const record = freshRecord();
+      const sql = instance.sql.bind(instance);
+
+      // The new flow runs createSync BEFORE registerWebhook, then runs
+      // updateSync AFTER registerWebhook returns. To drive the
+      // update-fail branch without monkey-patching the db helper, we
+      // have the fake __registerWebhook DELETE the freshly-inserted row
+      // as a side effect. The subsequent updateSync throws
+      // "no sync with id=..." and the tool's step-6 catch runs cleanup.
       const restoreFacets = installFakeFacets(
         instance,
         makeFakeFacets(record, {
           __registerWebhook: async (config) => {
             record.registerCalls.push(config);
-            return { id: "wh_persist", secret: "sec_persist" };
-          }
-        })
-      );
-
-      // Pre-seed a row with the SAME `name` so createSync's UNIQUE
-      // constraint fires when the tool tries to persist. The tool's
-      // getSyncByName guard uses the EXACT same name — so we need to
-      // sneak the conflict past that guard. We do it by inserting a
-      // row whose name exactly matches the one create_sync is about to
-      // use: the guard already returns duplicate_name before reaching
-      // the register step. Instead: pre-seed with a conflicting `id`
-      // is no good (id is a UUID generated per call). The reliable
-      // way is to race the INSERT — but vitest has no concurrency
-      // hook here. So we substitute the createSync path by pre-
-      // seeding a row with a unique constraint collision on an
-      // implementation detail: create_sync checks getSyncByName, but
-      // not getSyncById. Insert a conflicting row AFTER the guard via
-      // a __registerWebhook-time side effect that writes a row with
-      // the same name into the DB.
-      //
-      // Simplest approach: __registerWebhook is called AFTER the
-      // duplicate-name guard but BEFORE createSync. Have the fake
-      // __registerWebhook insert a row with the same name, then
-      // return the stub webhook ids. createSync's INSERT will
-      // collide on the `name` UNIQUE index and throw.
-      const sql = instance.sql.bind(instance);
-      const originalRegister = record.registerCalls;
-      // Rebuild the fake with a register that also seeds a conflicting row.
-      restoreFacets();
-      const restoreFacets2 = installFakeFacets(
-        instance,
-        makeFakeFacets(record, {
-          __registerWebhook: async (config) => {
-            originalRegister.push(config);
-            sql`
-              INSERT INTO syncs (
-                id, name, integration, handler_code, schema_ddl,
-                filter_description, webhook_secret, upstream_webhook_id,
-                code_id, version, created_at, updated_at
-              ) VALUES (
-                'squat-1', 'persist-target', 'linear', '', '',
-                NULL, 's', NULL, 'c', 1, ${Date.now()}, ${Date.now()}
-              )
-            `;
+            // Parse sync id out of the callbackUrl and delete the row
+            // so the pending updateSync raises.
+            const match = config.callbackUrl.match(
+              /\/webhook\/[^/]+\/([^/]+)$/
+            );
+            const sid = match?.[1] ?? "";
+            sql`DELETE FROM syncs WHERE id = ${sid}`;
             return { id: "wh_persist", secret: "sec_persist" };
           }
         })
@@ -503,7 +514,7 @@ describe("createSyncTool", () => {
         const tools = createSyncTool(instance);
         const result = await tools.execute!(
           {
-            name: "persist-target",
+            name: "update-target",
             integration: "linear",
             schema_ddl: SAMPLE_SCHEMA,
             handler_code: SAMPLE_HANDLER
@@ -516,20 +527,230 @@ describe("createSyncTool", () => {
           error: "persist_failed"
         });
 
-        // The pre-existing 'squat-1' row should still be there; no new
-        // row with our UUID should have been persisted.
+        // No sync rows remain: the row we inserted then lost was
+        // already gone before cleanup, and cleanup's delete is
+        // idempotent.
         const all = listSyncs(sql);
-        expect(all).toHaveLength(1);
-        expect(all[0].id).toBe("squat-1");
+        expect(all).toHaveLength(0);
 
-        expect(record.facetsDeleteCalls).toEqual(["persist-target"]);
+        expect(record.facetsDeleteCalls).toEqual(["update-target"]);
         expect(record.registerCalls).toHaveLength(1);
-        // Persist-fail branch MUST call __unregisterWebhook best-effort.
+        // Update-fail branch MUST call __unregisterWebhook — the
+        // upstream has a live webhook pointing at a sync we're about
+        // to delete locally.
         expect(record.unregisterCalls).toHaveLength(1);
         expect(record.unregisterCalls[0].id).toBe("wh_persist");
         expect(record.unregisterCalls[0].label).toMatch(/self-syncing-agent:/);
       } finally {
-        restoreFacets2();
+        restoreFacets();
+      }
+    });
+  });
+
+  // Four dedicated ordering-invariant tests. These pin the sequence
+  // createSync → __supervisorPing → __registerWebhook → updateSync
+  // and the compensation branches that the Task-3 regression fix turns
+  // on. The earlier tests cover much of this implicitly; these are
+  // here so a future refactor can't silently reorder the flow without
+  // at least one test failing with an obvious signal.
+
+  it("order: createSync runs before __registerWebhook (row visible to egress gateway)", async () => {
+    const stub = getStub("order-insert-before-register");
+    const userName = "order-insert-before-register";
+
+    await runInDurableObject(stub, async (instance) => {
+      await ensureReady(instance, userName);
+      const record = freshRecord();
+      let sawRowDuringRegister = false;
+      const restoreFacets = installFakeFacets(
+        instance,
+        makeFakeFacets(record, {
+          __registerWebhook: async (config) => {
+            record.registerCalls.push(config);
+            const sql = instance.sql.bind(instance);
+            const match = config.callbackUrl.match(
+              /\/webhook\/[^/]+\/([^/]+)$/
+            );
+            const sid = match?.[1] ?? "";
+            sawRowDuringRegister = getSyncById(sql, sid) !== null;
+            return { id: "wh_ord", secret: "sec_ord" };
+          }
+        })
+      );
+
+      try {
+        const tools = createSyncTool(instance);
+        const result = await tools.execute!(
+          {
+            name: "ordering-check",
+            integration: "github",
+            schema_ddl: SAMPLE_SCHEMA,
+            handler_code: SAMPLE_HANDLER,
+            api_hosts: ["api.github.com"]
+          },
+          {} as never
+        );
+        if (!("ok" in result) || result.ok !== true) {
+          throw new Error(
+            `expected ok: true, got: ${JSON.stringify(result, null, 2)}`
+          );
+        }
+        expect(sawRowDuringRegister).toBe(true);
+      } finally {
+        restoreFacets();
+      }
+    });
+  });
+
+  it("compensation: __supervisorPing throws → row deleted, register/unregister never called", async () => {
+    const stub = getStub("comp-ping-fail");
+    const userName = "comp-ping-fail";
+
+    await runInDurableObject(stub, async (instance) => {
+      await ensureReady(instance, userName);
+      const record = freshRecord();
+      const restoreFacets = installFakeFacets(
+        instance,
+        makeFakeFacets(record, {
+          __supervisorPing: async () => {
+            // Confirm the row was inserted BEFORE ping ran — that's the
+            // whole point of the reorder. We can't assert here without a
+            // closure on the tool's syncId, but the tool-level assertion
+            // below (listSyncs is empty) covers it.
+            throw new Error("compile boom");
+          }
+        })
+      );
+
+      try {
+        const tools = createSyncTool(instance);
+        const result = await tools.execute!(
+          {
+            name: "ping-fails",
+            integration: "linear",
+            schema_ddl: SAMPLE_SCHEMA,
+            handler_code: SAMPLE_HANDLER
+          },
+          {} as never
+        );
+        expect(result).toMatchObject({
+          ok: false,
+          error: "facet_load_failed"
+        });
+
+        const sql = instance.sql.bind(instance);
+        expect(listSyncs(sql)).toHaveLength(0);
+
+        expect(record.registerCalls).toHaveLength(0);
+        expect(record.unregisterCalls).toHaveLength(0);
+        expect(record.facetsDeleteCalls).toEqual(["ping-fails"]);
+      } finally {
+        restoreFacets();
+      }
+    });
+  });
+
+  it("compensation: __registerWebhook rejects → row deleted, unregister NOT called", async () => {
+    const stub = getStub("comp-register-fail");
+    const userName = "comp-register-fail";
+
+    await runInDurableObject(stub, async (instance) => {
+      await ensureReady(instance, userName);
+      const record = freshRecord();
+      const restoreFacets = installFakeFacets(
+        instance,
+        makeFakeFacets(record, {
+          __registerWebhook: async (config) => {
+            record.registerCalls.push(config);
+            throw new Error("GitHub API 500");
+          }
+        })
+      );
+
+      try {
+        const tools = createSyncTool(instance);
+        const result = await tools.execute!(
+          {
+            name: "register-fails",
+            integration: "github",
+            schema_ddl: SAMPLE_SCHEMA,
+            handler_code: SAMPLE_HANDLER,
+            api_hosts: ["api.github.com"]
+          },
+          {} as never
+        );
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: "webhook_register_failed"
+        });
+
+        const sql = instance.sql.bind(instance);
+        expect(listSyncs(sql)).toHaveLength(0);
+
+        expect(record.registerCalls).toHaveLength(1);
+        // Nothing to undo upstream — registration never completed.
+        expect(record.unregisterCalls).toHaveLength(0);
+        expect(record.facetsDeleteCalls).toEqual(["register-fails"]);
+      } finally {
+        restoreFacets();
+      }
+    });
+  });
+
+  it("compensation: post-register updateSync throws → row deleted, unregister IS called", async () => {
+    const stub = getStub("comp-update-fail");
+    const userName = "comp-update-fail";
+
+    await runInDurableObject(stub, async (instance) => {
+      await ensureReady(instance, userName);
+      const record = freshRecord();
+      const sql = instance.sql.bind(instance);
+
+      // Drive updateSync's "no sync with id=..." branch by deleting
+      // the row from inside __registerWebhook — same trick as the
+      // primary "rolls back on post-register updateSync failure" test
+      // but kept separate here to pin the invariant as a named case.
+      const restoreFacets = installFakeFacets(
+        instance,
+        makeFakeFacets(record, {
+          __registerWebhook: async (config) => {
+            record.registerCalls.push(config);
+            const match = config.callbackUrl.match(
+              /\/webhook\/[^/]+\/([^/]+)$/
+            );
+            const sid = match?.[1] ?? "";
+            sql`DELETE FROM syncs WHERE id = ${sid}`;
+            return { id: "wh_upd", secret: "sec_upd" };
+          }
+        })
+      );
+
+      try {
+        const tools = createSyncTool(instance);
+        const result = await tools.execute!(
+          {
+            name: "update-fails",
+            integration: "github",
+            schema_ddl: SAMPLE_SCHEMA,
+            handler_code: SAMPLE_HANDLER
+          },
+          {} as never
+        );
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: "persist_failed"
+        });
+
+        expect(listSyncs(sql)).toHaveLength(0);
+        expect(record.registerCalls).toHaveLength(1);
+        // Upstream webhook IS live; we must undo it.
+        expect(record.unregisterCalls).toHaveLength(1);
+        expect(record.unregisterCalls[0].id).toBe("wh_upd");
+        expect(record.facetsDeleteCalls).toEqual(["update-fails"]);
+      } finally {
+        restoreFacets();
       }
     });
   });

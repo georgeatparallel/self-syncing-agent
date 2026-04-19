@@ -1,7 +1,12 @@
 import { tool } from "ai";
 import { z } from "zod";
 import type { ChatAgent } from "../../../server";
-import { createSync, getSyncByName } from "../../../db/syncs";
+import {
+  createSync,
+  deleteSync,
+  getSyncByName,
+  updateSync
+} from "../../../db/syncs";
 import { attachFacet } from "../../../facet/loader";
 import type { NewSync, Sync } from "../../../db/types";
 
@@ -294,15 +299,25 @@ export async function handleWebhook(request, sql, ctx) {
       const callbackUrl = `${agent.env.PUBLIC_BASE_URL}/webhook/${userId}/${syncId}`;
       const label = `self-syncing-agent:${userId.slice(0, 8)}:${name}`;
 
-      // 2. Build a PRELIMINARY NewSync with placeholder webhook_secret +
-      //    upstream_webhook_id. The facet bundle doesn't bake either of
-      //    these into generated code (verified in Task 2 Step 1 against
-      //    src/facet/bundle.ts — only schema_ddl, handler_code, and
-      //    userId end up in the loaded modules) — the secret is a runtime
-      //    arg to __verifySignature; the upstream id is only used by
-      //    delete_sync. So the preliminary attach is safe.
+      // 2. Build the sync row with empty-string placeholders for
+      //    `webhook_secret` + `upstream_webhook_id`. These columns are
+      //    NOT NULL in the schema, so "" is the least-invasive sentinel
+      //    for the ~200ms window between INSERT and the post-register
+      //    UPDATE. The row is unusable during that window (no webhook
+      //    registered → no incoming deliveries) so the placeholder never
+      //    gets read by the signature verifier.
+      //
+      //    Why insert BEFORE attachFacet + registerWebhook?
+      //    Phase F Task 3 coupled the egress gateway's per-request
+      //    authorization to a live SQL lookup: HttpGateway RPCs into
+      //    ChatAgent.resolveEgress(userId, syncId, host, appSlug) which
+      //    reads sync.api_hosts from this DO's SQLite via getSyncById. If
+      //    the sync row doesn't exist yet, every outbound fetch from the
+      //    handler 403s with `sync_not_found`. registerWebhook is the
+      //    very first place the handler makes an outbound fetch, so the
+      //    row HAS to be in SQL before we call it.
       const codeId = `sync:${syncId}:v1`;
-      const preliminarySync: NewSync = {
+      const syncRow: NewSync = {
         id: syncId,
         name,
         integration,
@@ -315,25 +330,68 @@ export async function handleWebhook(request, sql, ctx) {
         api_hosts: api_hosts ?? []
       };
 
-      // 3. Attach + ping the facet to force Worker Loader compilation. If
-      //    handler.js has a syntax error or is missing required exports,
-      //    __supervisorPing rejects here and we bail before any network
-      //    call to the upstream.
+      // 3. INSERT the sync row. If this throws (e.g. a rare UNIQUE
+      //    violation that snuck past the getSyncByName guard), propagate
+      //    without compensation — there's nothing to clean up yet.
+      try {
+        createSync(sql, syncRow);
+      } catch (e) {
+        return {
+          ok: false,
+          error: "persist_failed",
+          detail: e instanceof Error ? e.message : String(e)
+        };
+      }
+
+      // 4. Attach the facet. We declare `facet` up front (before the
+      //    cleanup closure) so the closure can reference it — the
+      //    Worker Loader callback inside attachFacet is lazy, so this
+      //    line alone doesn't trigger compilation; __supervisorPing
+      //    below is what forces module eval.
       const facet = attachFacet(
         agent.env,
         agent.ctx.facets,
-        preliminarySync as unknown as Sync,
+        syncRow as unknown as Sync,
         userId
       );
-      try {
-        await (facet as unknown as FacetRegisterRpc).__supervisorPing();
-      } catch (e) {
+
+      // Consolidated cleanup for every failure path after step 3.
+      // unregisterRegisteredWebhookId is non-null ONLY if registerWebhook
+      // already succeeded — in every other failure we skip the upstream
+      // call because there's nothing to undo.
+      const cleanup = async (
+        unregisterRegisteredWebhookId: string | null
+      ): Promise<void> => {
+        if (unregisterRegisteredWebhookId !== null) {
+          try {
+            await (facet as unknown as FacetRegisterRpc).__unregisterWebhook({
+              id: unregisterRegisteredWebhookId,
+              label
+            });
+          } catch {
+            // Swallow — the original error is what we want to surface.
+          }
+        }
         try {
           agent.ctx.facets.delete(name);
         } catch {
           // facets.delete throws if the facet never actually started;
-          // tolerate because the primary error is the compile failure.
+          // tolerate.
         }
+        try {
+          deleteSync(sql, syncId);
+        } catch {
+          // Best-effort — if the DB is wedged there's nothing we can do.
+        }
+      };
+
+      // Ping to force Worker Loader compilation. If handler.js has a
+      // syntax error or is missing required exports, __supervisorPing
+      // rejects here.
+      try {
+        await (facet as unknown as FacetRegisterRpc).__supervisorPing();
+      } catch (e) {
+        await cleanup(null);
         return {
           ok: false,
           error: "facet_load_failed",
@@ -341,12 +399,11 @@ export async function handleWebhook(request, sql, ctx) {
         };
       }
 
-      // 4. Call the handler's registerWebhook to register the upstream
+      // 5. Call the handler's registerWebhook to register the upstream
       //    webhook. The facet's fetch routes through HttpGateway →
       //    Pipedream proxy, so auth is injected automatically for
-      //    Pipedream-connected apps. If the account isn't connected, the
-      //    handler's fetch() call will get a 403 from HttpGateway and the
-      //    handler should surface that as a thrown Error.
+      //    Pipedream-connected apps. The egress gateway can now resolve
+      //    this sync's api_hosts (the row was INSERTed in step 3).
       let registered: { id: string; secret: string };
       try {
         const raw = await (
@@ -369,11 +426,8 @@ export async function handleWebhook(request, sql, ctx) {
         }
         registered = raw;
       } catch (e) {
-        try {
-          agent.ctx.facets.delete(name);
-        } catch {
-          // Tolerate — the register failure is the primary error.
-        }
+        // Registration never succeeded — nothing to unregister upstream.
+        await cleanup(null);
         return {
           ok: false,
           error: "webhook_register_failed",
@@ -381,36 +435,17 @@ export async function handleWebhook(request, sql, ctx) {
         };
       }
 
-      // 5. Persist the DB row with the real webhook_secret +
-      //    upstream_webhook_id returned by the handler.
-      const finalSync: NewSync = {
-        ...preliminarySync,
-        webhook_secret: registered.secret,
-        upstream_webhook_id: registered.id,
-        api_hosts: api_hosts ?? []
-      };
-
+      // 6. Patch the row with the real webhook_secret +
+      //    upstream_webhook_id returned by the handler. If this throws,
+      //    we DO need to unregister upstream — the webhook is live on
+      //    their side but our local row is about to be deleted.
       try {
-        createSync(sql, finalSync);
+        updateSync(sql, syncId, {
+          webhook_secret: registered.secret,
+          upstream_webhook_id: registered.id
+        });
       } catch (e) {
-        // Persist failed after registerWebhook succeeded. Best-effort
-        // unregister upstream so we don't leave a dangling webhook
-        // pointing at a sync that doesn't exist locally. Errors from
-        // __unregisterWebhook are tolerated — we still want to surface
-        // the original persist_failed error.
-        try {
-          await (facet as unknown as FacetRegisterRpc).__unregisterWebhook({
-            id: registered.id,
-            label
-          });
-        } catch {
-          // Swallow — the original persist error is what matters.
-        }
-        try {
-          agent.ctx.facets.delete(name);
-        } catch {
-          // Tolerate.
-        }
+        await cleanup(registered.id);
         return {
           ok: false,
           error: "persist_failed",

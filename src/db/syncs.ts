@@ -81,6 +81,7 @@ export function updateSync(sql: SqlTag, id: string, patch: SyncPatch): Sync {
       patch.filter_description === undefined
         ? existing.filter_description
         : patch.filter_description,
+    webhook_secret: patch.webhook_secret ?? existing.webhook_secret,
     upstream_webhook_id:
       patch.upstream_webhook_id === undefined
         ? existing.upstream_webhook_id
@@ -96,6 +97,7 @@ export function updateSync(sql: SqlTag, id: string, patch: SyncPatch): Sync {
       handler_code = ${next.handler_code},
       schema_ddl = ${next.schema_ddl},
       filter_description = ${next.filter_description},
+      webhook_secret = ${next.webhook_secret},
       upstream_webhook_id = ${next.upstream_webhook_id},
       code_id = ${next.code_id},
       version = ${next.version},
