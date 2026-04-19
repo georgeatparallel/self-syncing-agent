@@ -61,7 +61,7 @@ function getJwks(teamDomain: string): ReturnType<typeof createRemoteJWKSet> {
  * is lowercased so downstream comparisons are normalization-free.
  */
 async function resolveIdentity(c: {
-  req: { header: (k: string) => string | undefined };
+  req: { header: (k: string) => string | undefined; url: string };
   env: AuthedEnv["Bindings"];
 }): Promise<{ userId: string; email: string } | null> {
   const jwt = c.req.header(CF_ACCESS_JWT_HEADER);
@@ -86,9 +86,27 @@ async function resolveIdentity(c: {
       return null;
     } catch {
       // Signature/audience/issuer/expiry mismatch — treat any verification
-      // failure uniformly as "no valid identity".
+      // failure uniformly as "no valid identity". Crucially, we do NOT
+      // fall through to DEV_FALLBACK_USER here: a malformed/forged JWT
+      // must never silently downgrade to dev credentials.
       return null;
     }
+  }
+
+  /**
+   * ⚠️ DEV-ONLY FALLBACK — production traffic MUST NOT reach this branch.
+   *
+   * Guarded by hostname === "localhost" | "127.0.0.1". The workers_dev=false
+   * setting + Cloudflare Access in front of the custom domain means every
+   * production request carries a verified JWT and exits above before reaching
+   * here. The hostname check is belt-and-suspenders against a future operator
+   * accidentally setting DEV_FALLBACK_USER on prod (pattern the repo has seen
+   * before with other secrets — see memory: mirror-.dev.vars-to-prod-secrets).
+   */
+  const reqHost = new URL(c.req.url).hostname;
+  const isLocalDevHost = reqHost === "localhost" || reqHost === "127.0.0.1";
+  if (!isLocalDevHost) {
+    return null;
   }
   const dev = c.env.DEV_FALLBACK_USER;
   if (dev) {

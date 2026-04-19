@@ -134,6 +134,39 @@ describe("requireAuth", () => {
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "unauthenticated" });
   });
+
+  it("invalid JWT with DEV_FALLBACK_USER set still returns 401 (no silent fallback)", async () => {
+    // Pins the no-fall-through contract: a malformed/forged JWT must NEVER
+    // silently downgrade to DEV_FALLBACK_USER. The `if (jwt) { ... }` gating
+    // in resolveIdentity enforces this today; this test would break if a
+    // future refactor let the dev-fallback branch execute after a verify throw.
+    jwtVerifyMock.mockRejectedValueOnce(
+      new Error("signature verification failed")
+    );
+    const app = makeAuthedApp();
+    const res = await app.request(
+      "/me",
+      { headers: { [CF_ACCESS_JWT_HEADER]: "malformed.jwt.token" } },
+      { ...BASE_ENV, DEV_FALLBACK_USER: "dev@local" }
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthenticated" });
+  });
+
+  it("DEV_FALLBACK_USER is IGNORED on non-local hostnames", async () => {
+    // Belt-and-suspenders for the prod-footgun: if an operator ever sets
+    // DEV_FALLBACK_USER as a prod secret by mistake, the hostname guard
+    // prevents every unauthenticated request from authenticating as that
+    // user. Only localhost / 127.0.0.1 ever honour the fallback.
+    const app = makeAuthedApp();
+    const res = await app.request(
+      "https://sauna.ronit.one/me",
+      {},
+      { ...BASE_ENV, DEV_FALLBACK_USER: "dev@local" }
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthenticated" });
+  });
 });
 
 describe("requireAuthAndUserIdMatch", () => {
