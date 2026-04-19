@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { formatActiveSyncs, formatSyncErrors } from "./context";
-import type { Sync, SyncErrorStat } from "../db/types";
+import {
+  formatActiveSyncs,
+  formatConnectedAccounts,
+  formatSyncErrors
+} from "./context";
+import type { ConnectedAccount, Sync, SyncErrorStat } from "../db/types";
 
 function sampleSync(overrides: Partial<Sync> = {}): Sync {
   return {
@@ -20,6 +24,41 @@ function sampleSync(overrides: Partial<Sync> = {}): Sync {
     ...overrides
   };
 }
+
+describe("formatConnectedAccounts", () => {
+  it("emits an instructional stub when no accounts are connected", () => {
+    const output = formatConnectedAccounts([]);
+    expect(output).toContain("<connected_accounts>");
+    expect(output).toContain("</connected_accounts>");
+    expect(output.toLowerCase()).toContain("no pipedream integrations");
+    // Surface the failure mode so the agent doesn't have to guess.
+    expect(output).toContain("account_not_connected");
+  });
+
+  it("formats a populated list as a one-column app_slug table", () => {
+    const accounts: ConnectedAccount[] = [
+      {
+        user_id: "u-1",
+        app_slug: "linear",
+        account_id: "apn_l",
+        connected_at: 1
+      },
+      {
+        user_id: "u-1",
+        app_slug: "slack",
+        account_id: "apn_s",
+        connected_at: 2
+      }
+    ];
+    const output = formatConnectedAccounts(accounts);
+    expect(output).toContain("<connected_accounts>");
+    expect(output).toContain("| app_slug |");
+    expect(output).toContain("| linear |");
+    expect(output).toContain("| slack |");
+    // The block must teach the agent how to USE the slugs, not just name them.
+    expect(output).toContain("X-Pd-App");
+  });
+});
 
 describe("formatActiveSyncs", () => {
   it("formats empty list with a clear stub message", () => {

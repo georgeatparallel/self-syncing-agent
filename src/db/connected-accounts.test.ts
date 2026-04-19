@@ -3,7 +3,8 @@ import { describe, it, expect } from "vitest";
 import {
   upsertConnectedAccount,
   listConnectedAccounts,
-  deleteConnectedAccount
+  deleteConnectedAccount,
+  getConnectedAccountBySlug
 } from "./connected-accounts";
 import type { NewConnectedAccount } from "./types";
 
@@ -122,6 +123,53 @@ describe("connected_accounts repo", () => {
       const forB = listConnectedAccounts(sql, "u-b");
       expect(forB).toHaveLength(1);
       expect(forB[0].account_id).toBe("apn_b1");
+    });
+  });
+
+  it("getConnectedAccountBySlug returns the matching row or null", async () => {
+    const { stub, userName } = getStub("ca-by-slug-user");
+
+    await runInDurableObject(stub, async (instance) => {
+      await ensureReady(instance, userName);
+      const sql = bindSql(instance);
+
+      upsertConnectedAccount(
+        sql,
+        sample({
+          user_id: "u-slug",
+          app_slug: "github",
+          account_id: "apn_gh"
+        })
+      );
+      upsertConnectedAccount(
+        sql,
+        sample({
+          user_id: "u-slug",
+          app_slug: "slack",
+          account_id: "apn_sl"
+        })
+      );
+      // Different user — must not bleed into the u-slug lookup.
+      upsertConnectedAccount(
+        sql,
+        sample({
+          user_id: "u-other",
+          app_slug: "github",
+          account_id: "apn_other"
+        })
+      );
+
+      const gh = getConnectedAccountBySlug(sql, "u-slug", "github");
+      expect(gh).not.toBeNull();
+      expect(gh?.account_id).toBe("apn_gh");
+
+      const sl = getConnectedAccountBySlug(sql, "u-slug", "slack");
+      expect(sl?.account_id).toBe("apn_sl");
+
+      // Not connected.
+      expect(getConnectedAccountBySlug(sql, "u-slug", "notion")).toBeNull();
+      // Wrong user.
+      expect(getConnectedAccountBySlug(sql, "u-nobody", "github")).toBeNull();
     });
   });
 

@@ -3,6 +3,13 @@ import { RpcTarget } from "cloudflare:workers";
 interface BridgeDeps {
   sql: SqlStorage;
   userId: string;
+  /**
+   * Optional — not all callers know their syncId. The llm-gateway's
+   * subagent path, when spawned from a facet's handleWebhook, will pass
+   * the facet's own syncId so any `fetch`/`exec` tool calls can flow
+   * through the credential-injection gateway correctly.
+   */
+  syncId?: string;
 }
 
 /**
@@ -25,11 +32,13 @@ interface BridgeDeps {
 export class FacetAgentBridge extends RpcTarget {
   #sql: SqlStorage;
   #userId: string;
+  #syncId: string;
 
   constructor(deps: BridgeDeps) {
     super();
     this.#sql = deps.sql;
     this.#userId = deps.userId;
+    this.#syncId = deps.syncId ?? "";
   }
 
   async sqlExec(
@@ -55,5 +64,16 @@ export class FacetAgentBridge extends RpcTarget {
 
   async getUserId(): Promise<string> {
     return this.#userId;
+  }
+
+  /**
+   * Returns the syncId this bridge was scoped to, or "" if the caller
+   * didn't provide one. The gateway needs it to scope api_hosts lookups
+   * per-sync; supervisor-side callers that don't have a sync in scope
+   * (e.g., tests) will get a 403 `no_user_context` when the empty
+   * syncId flows through the gateway — by design, fail closed.
+   */
+  async getSyncId(): Promise<string> {
+    return this.#syncId;
   }
 }

@@ -20,12 +20,14 @@ import {
 import { logSyncError, getRecentSyncErrors } from "./db/sync-errors";
 import {
   upsertConnectedAccount,
-  listConnectedAccounts
+  listConnectedAccounts,
+  getConnectedAccountBySlug
 } from "./db/connected-accounts";
 import type { ConnectedAccount } from "./db/types";
 import { getCachedAccessToken, createConnectToken } from "./pipedream";
 import { attachFacet } from "./facet/loader";
 import { requireAuth, requireAuthAndUserIdMatch } from "./auth/middleware";
+import { matchesHost } from "./proxy/http-gateway";
 
 export { HttpGateway } from "./proxy/http-gateway";
 export { LLMGateway } from "./agent-runtime/llm-gateway";
@@ -398,20 +400,48 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
   }
 
   /**
-   * Resolve a single app's connected account_id for this user, or null if
-   * the user hasn't linked that app. Supervisor-SQLite-only; no facet
-   * attach. Same direct-RPC hydration pattern as siblings — setName first,
-   * then ensure schema.
+   * Gateway's single source of truth for "can this fetch go out, and if
+   * so which Pipedream account injects the credentials?" Called per-fetch
+   * from the HttpGateway WorkerEntrypoint's `fetch` (via direct RPC).
+   *
+   * Reads live on every call — no caching on the gateway side, because
+   * Worker Loader bundles are cached by `sync:<id>:v<version>` and
+   * connected-account changes don't bump the version.
+   *
+   * Per-sync isolation: every read is scoped by syncId or (userId,
+   * appSlug). No cross-sync walks on the fetch path.
+   *
+   * userId is the first parameter by convention: every direct-RPC method
+   * on this class must `await this.setName(userId)` before touching
+   * this.sql (the Agents SDK's setState emits via this.name, and direct
+   * RPCs bypass the routing that normally hydrates it).
    */
-  async getConnectedAccountId(
+  async resolveEgress(
     userId: string,
+    syncId: string,
+    host: string,
     appSlug: string
-  ): Promise<string | null> {
+  ): Promise<
+    | { ok: true; accountId: string }
+    | {
+        ok: false;
+        error: "sync_not_found" | "unknown_host" | "account_not_connected";
+      }
+  > {
     await this.setName(userId);
     this.#ensureSchema();
-    const rows = listConnectedAccounts(this.sql.bind(this), userId);
-    const found = rows.find((r) => r.app_slug === appSlug);
-    return found ? found.account_id : null;
+    const sql = this.sql.bind(this);
+
+    const sync = getSyncById(sql, syncId);
+    if (!sync) return { ok: false, error: "sync_not_found" };
+    if (!matchesHost(sync.api_hosts, host)) {
+      return { ok: false, error: "unknown_host" };
+    }
+
+    const account = getConnectedAccountBySlug(sql, userId, appSlug);
+    if (!account) return { ok: false, error: "account_not_connected" };
+
+    return { ok: true, accountId: account.account_id };
   }
 
   @callable()
@@ -441,7 +471,7 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
     const sql = this.sql.bind(this);
 
     const messages = [
-      ...buildContextMessages(sql),
+      ...buildContextMessages(sql, this.name),
       ...(await convertToModelMessages(this.messages))
     ];
 

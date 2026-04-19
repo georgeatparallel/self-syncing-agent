@@ -60,4 +60,19 @@ describe("FacetAgentBridge", () => {
     });
     expect(await bridge.getUserId()).toBe("u-42");
   });
+
+  it("exposes syncId when provided, or empty-string default", async () => {
+    const withSync = new FacetAgentBridge({
+      sql: { exec: vi.fn() } as unknown as SqlStorage,
+      userId: "u",
+      syncId: "sync-99"
+    });
+    expect(await withSync.getSyncId()).toBe("sync-99");
+
+    const withoutSync = new FacetAgentBridge({
+      sql: { exec: vi.fn() } as unknown as SqlStorage,
+      userId: "u"
+    });
+    expect(await withoutSync.getSyncId()).toBe("");
+  });
 });

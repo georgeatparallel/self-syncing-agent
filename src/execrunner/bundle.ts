@@ -16,6 +16,13 @@ export interface ExecWorkerCode {
 export interface BuildExecWorkerCodeInput {
   code: string; // agent-authored ES module; must export runInSync(facet, fetch)
   userId: string;
+  /**
+   * The sync the exec is running against. Stamped on HttpGateway props so
+   * resolveEgress can scope its api_hosts lookup to exactly this sync's
+   * row. Mirrors the facet path — exec isolates are credentially
+   * indistinguishable from their sibling facet.
+   */
+  syncId: string;
 }
 
 /**
@@ -26,9 +33,9 @@ export interface BuildExecWorkerCodeInput {
  *   - exec.js  (agent-authored): must export async function runInSync(facet, fetch)
  *
  * globalOutbound is set to the HttpGateway WorkerEntrypoint, stamped with
- * userId so the gateway can inject user-scoped credentials. Same pattern
- * as buildFacetWorkerCode — the exec isolate is credentially indistinguishable
- * from its sibling facet.
+ * {userId, syncId} so the gateway can resolve egress live from the user's
+ * ChatAgent DO. Same pattern as buildFacetWorkerCode — the exec isolate
+ * is credentially indistinguishable from its sibling facet.
  */
 export function buildExecWorkerCode(
   input: BuildExecWorkerCodeInput
@@ -50,6 +57,8 @@ export function buildExecWorkerCode(
       workerExports as unknown as {
         HttpGateway: (opts: { props: unknown }) => Fetcher;
       }
-    ).HttpGateway({ props: { userId: input.userId } })
+    ).HttpGateway({
+      props: { userId: input.userId, syncId: input.syncId }
+    })
   };
 }

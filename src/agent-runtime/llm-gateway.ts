@@ -74,6 +74,17 @@ export async function runAgent(
 
   const anthropic = createAnthropic({ apiKey: env.ANTHROPIC_API_KEY });
   const userId = await bridge.getUserId();
+  // Bridge.getSyncId was introduced in Phase F so the subagent's
+  // fetch/exec tools can route through the credential-injection gateway
+  // with the correct sync scope. Pre-F bridges won't have the method;
+  // treat missing-method as "no sync in scope", fail closed at the
+  // gateway. Not ok to hard-error here — some call sites legitimately
+  // have no sync context (tests, supervisor-side diagnostics).
+  const syncId =
+    typeof (bridge as { getSyncId?: () => Promise<string> }).getSyncId ===
+    "function"
+      ? await (bridge as { getSyncId: () => Promise<string> }).getSyncId()
+      : "";
 
   const tools = {
     sql: tool({
@@ -111,7 +122,7 @@ Returns on SQLite error:
         // fetch for no benefit. Policy still lives in one place
         // (handleGatewayRequest in src/proxy/http-gateway.ts).
         const req = new Request(url, { method, headers, body });
-        const res = await handleGatewayRequest(req, env, { userId });
+        const res = await handleGatewayRequest(req, env, { userId, syncId });
         const text = await res.text();
         return { status: res.status, body: text };
       }
@@ -140,7 +151,7 @@ Returns:
       inputSchema: z.object({ code: z.string() }),
       execute: async ({ code }) => {
         const { buildExecWorkerCode } = await import("../execrunner/bundle");
-        const bundle = buildExecWorkerCode({ code, userId });
+        const bundle = buildExecWorkerCode({ code, userId, syncId });
         const stub = (
           env.LOADER as unknown as {
             load: (c: unknown) => {

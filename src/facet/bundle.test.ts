@@ -28,7 +28,8 @@ describe("buildFacetWorkerCode", () => {
     const code = buildFacetWorkerCode({
       schemaDdl: "CREATE TABLE issues (id TEXT PRIMARY KEY);",
       handlerCode: "export async function handleWebhook() {}",
-      userId: "user-abc"
+      userId: "user-abc",
+      syncId: "sync-1"
     });
 
     expect(code.mainModule).toBe("main.js");
@@ -44,7 +45,8 @@ describe("buildFacetWorkerCode", () => {
     const code = buildFacetWorkerCode({
       schemaDdl: "anything",
       handlerCode: "anything",
-      userId: "u"
+      userId: "u",
+      syncId: "s"
     });
     expect(code.modules["main.js"]).toBe(FACET_WRAPPER_SOURCE);
   });
@@ -57,7 +59,8 @@ describe("buildFacetWorkerCode", () => {
     const code = buildFacetWorkerCode({
       schemaDdl: tricky,
       handlerCode: "export async function handleWebhook() {}",
-      userId: "u"
+      userId: "u",
+      syncId: "s"
     });
 
     expect(code.modules["schema.js"]).toBe(
@@ -70,15 +73,16 @@ describe("buildFacetWorkerCode", () => {
     expect(JSON.parse(JSON.stringify(tricky))).toBe(tricky);
   });
 
-  it("sets globalOutbound to HttpGateway stamped with userId props", () => {
+  it("sets globalOutbound to HttpGateway stamped with {userId, syncId} props", () => {
     const code = buildFacetWorkerCode({
       schemaDdl: "x",
       handlerCode: "y",
-      userId: "user-xyz"
+      userId: "user-xyz",
+      syncId: "sync-42"
     });
     expect(code.globalOutbound).toMatchObject({
       __mockHttpGateway: true,
-      props: { userId: "user-xyz" }
+      props: { userId: "user-xyz", syncId: "sync-42" }
     });
   });
 
@@ -87,7 +91,8 @@ describe("buildFacetWorkerCode", () => {
       schemaDdl: "CREATE TABLE IF NOT EXISTS x (id TEXT);",
       handlerCode:
         "export async function handleWebhook(){ return new Response('ok'); }",
-      userId: "u1"
+      userId: "u1",
+      syncId: "s1"
     });
     const main = bundle.modules["main.js"];
     expect(main).toMatch(/#ensureSchema/);
@@ -106,7 +111,8 @@ describe("buildFacetWorkerCode — agent primitive", () => {
       schemaDdl: "CREATE TABLE t (id INTEGER);",
       handlerCode:
         "export async function handleWebhook() { return new Response('ok'); }",
-      userId: "u-123"
+      userId: "u-123",
+      syncId: "s-123"
     });
     expect(Object.keys(bundle.modules).sort()).toEqual([
       "agent.js",
@@ -121,7 +127,8 @@ describe("buildFacetWorkerCode — agent primitive", () => {
     const bundle = buildFacetWorkerCode({
       schemaDdl: "",
       handlerCode: "",
-      userId: "u-123"
+      userId: "u-123",
+      syncId: "s-123"
     });
     expect(bundle.env).toBeDefined();
     expect(bundle.env.LLM).toBeDefined();

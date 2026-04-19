@@ -30,6 +30,26 @@ export function listConnectedAccounts(
   `;
 }
 
+/**
+ * Look up a single connected account by (user_id, app_slug). Returns null
+ * if the user hasn't linked that app. Used by the gateway's resolveEgress
+ * RPC to pick the account_id for an outbound fetch's declared X-Pd-App
+ * slug — per-fetch, on the hot path, so it's a targeted single-row query
+ * rather than a full list + filter.
+ */
+export function getConnectedAccountBySlug(
+  sql: SqlTag,
+  userId: string,
+  appSlug: string
+): ConnectedAccount | null {
+  const rows = sql<ConnectedAccount>`
+    SELECT * FROM connected_accounts
+    WHERE user_id = ${userId} AND app_slug = ${appSlug}
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
 export function deleteConnectedAccount(
   sql: SqlTag,
   user_id: string,

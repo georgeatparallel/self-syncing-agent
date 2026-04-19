@@ -34,7 +34,8 @@ export function attachFacet(
       buildFacetWorkerCode({
         schemaDdl: sync.schema_ddl,
         handlerCode: sync.handler_code,
-        userId
+        userId,
+        syncId: sync.id
       })
     );
     return { class: worker.getDurableObjectClass("App") };
