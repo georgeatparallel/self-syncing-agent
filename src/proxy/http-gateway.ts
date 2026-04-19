@@ -200,19 +200,29 @@ export class HttpGateway extends WorkerEntrypoint<Env, HttpGatewayProps> {
       host,
       appSlug
     ) => {
+      // DO stubs must be explicitly disposed, else Workers warns the RPC
+      // result wasn't released and falls back to GC (arbitrary latency;
+      // not safe under load). @cloudflare/workers-types doesn't expose
+      // [Symbol.dispose] on DurableObjectStub yet, hence the cast.
       const stub = this.env.ChatAgent.get(
         this.env.ChatAgent.idFromName(userId)
       );
-      return (
-        stub as unknown as {
-          resolveEgress: (
-            u: string,
-            s: string,
-            h: string,
-            a: string
-          ) => ReturnType<EgressLookup>;
-        }
-      ).resolveEgress(userId, syncId, host, appSlug);
+      try {
+        return await (
+          stub as unknown as {
+            resolveEgress: (
+              u: string,
+              s: string,
+              h: string,
+              a: string
+            ) => ReturnType<EgressLookup>;
+          }
+        ).resolveEgress(userId, syncId, host, appSlug);
+      } finally {
+        (stub as unknown as { [Symbol.dispose]?: () => void })[
+          Symbol.dispose
+        ]?.();
+      }
     };
     return handleGatewayRequest(request, this.env, this.ctx.props, {
       egressLookup

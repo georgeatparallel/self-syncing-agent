@@ -25,8 +25,12 @@ const DEFAULT_STEPS = 8;
  */
 async function buildSubagentContext(env: Env, userId: string): Promise<string> {
   if (!userId) return formatConnectedAccounts([]);
+  // DO stubs must be explicitly disposed, else Workers warns the RPC
+  // result wasn't released and falls back to GC.
+  // @cloudflare/workers-types doesn't expose [Symbol.dispose] on
+  // DurableObjectStub yet, hence the cast.
+  const stub = env.ChatAgent.get(env.ChatAgent.idFromName(userId));
   try {
-    const stub = env.ChatAgent.get(env.ChatAgent.idFromName(userId));
     const accounts = await (
       stub as unknown as {
         listPipedreamAccounts: (u: string) => Promise<ConnectedAccount[]>;
@@ -35,6 +39,8 @@ async function buildSubagentContext(env: Env, userId: string): Promise<string> {
     return formatConnectedAccounts(accounts);
   } catch {
     return formatConnectedAccounts([]);
+  } finally {
+    (stub as unknown as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
   }
 }
 
