@@ -61,7 +61,17 @@ facet RPC methods:
 - \`await facet.__query(sql)\` → \`{ ok: true, rows } | { ok: false, error }\`. Read-only SQL.
 - \`await facet.__sqlExec(sql, ...bindings)\` → \`{ ok: true, rowsWritten, rowsRead } | { ok: false, error }\`. Arbitrary SQL (INSERT/UPDATE/DELETE/DDL).
 
-\`fetch\` is global and routes through the same auth proxy handler.js uses — the upstream token is injected automatically.
+\`fetch\` is global and routes through the same credential-injecting proxy handler.js uses. **Every fetch in your exec code MUST set the \`X-Pd-App\` header** to one of the user's connected app slugs (see the \`<connected_accounts>\` context block — use the slug verbatim). The gateway uses this to pick which Pipedream account's OAuth token to inject via Pipedream Connect. Additional gateway constraints:
+- Host must be in this sync's \`api_hosts\` (declared at create_sync). Undeclared hosts 403 \`unknown_host\`.
+- SSRF denylist rejects private IPs / cloud metadata / localhost / .internal / .local → 403 \`denied_host\`.
+- Missing \`X-Pd-App\` → 403 \`missing_app_header\`. Unknown slug (user hasn't connected that app) → 403 \`account_not_connected\`.
+
+Example fetch inside your exec code:
+  await fetch("https://api.slack.com/chat.postMessage", {
+    method: "POST",
+    headers: { "X-Pd-App": "slack", "Content-Type": "application/json" },
+    body: JSON.stringify({ channel, text })
+  });
 
 Logging: \`console.log\` / \`.info\` / \`.warn\` / \`.error\` are captured (last 200 entries, 2KB per message) and returned alongside the result on BOTH success and failure. Log before and after each \`fetch\` and \`__sqlExec\` boundary so a failing run is debuggable from the return value alone. Do NOT reassign \`console\` methods — you'll lose debug visibility.
 
