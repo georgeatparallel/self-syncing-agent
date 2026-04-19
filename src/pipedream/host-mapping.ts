@@ -3,11 +3,10 @@
  * pick the user's connected account for an outbound request. Keys are
  * lowercase; callers lowercase the hostname before lookup.
  *
- * Linear is included — Phase B migrates outbound Linear API calls
- * through Pipedream too. LINEAR_ACCESS_TOKEN env secret survives in
- * the codebase for now (still used by the hardcoded
- * registerLinearWebhook in src/integrations/linear-api.ts); that
- * gets removed in Phase D.
+ * Linear is included — outbound Linear API calls route through
+ * Pipedream just like every other app. The standalone Linear-specific
+ * token path was removed in Phase D once agent-authored webhook
+ * registration took over.
  */
 export const HOST_TO_APP_SLUG: Record<string, string> = {
   "api.linear.app": "linear",

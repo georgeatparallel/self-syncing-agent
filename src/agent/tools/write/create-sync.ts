@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { ChatAgent } from "../../../server";
 import { createSync, getSyncByName } from "../../../db/syncs";
 import { attachFacet } from "../../../facet/loader";
-import type { NewSync, Sync, Integration } from "../../../db/types";
+import type { NewSync, Sync } from "../../../db/types";
 
 // Typed RPC surface for the facet's Phase D methods. The cast is local to
 // this file — matches the pattern used elsewhere (query-sync.ts,
@@ -271,12 +271,7 @@ export async function handleWebhook(request, sql, ctx) {
       const preliminarySync: NewSync = {
         id: syncId,
         name,
-        // `integration` is now a free-form string on the input, but
-        // NewSync.integration is still typed as the narrow `Integration`
-        // union. Cast at the boundary — Phase D intentionally widens the
-        // agent-visible label; a follow-up can widen the DB type if we
-        // want stricter tracking.
-        integration: integration as Integration,
+        integration,
         handler_code,
         schema_ddl,
         filter_description: filter_description ?? null,

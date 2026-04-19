@@ -10,10 +10,9 @@
  * with 403 — facet code cannot reach the open internet.
  *
  * Linear was historically routed via a hardcoded Authorization header
- * using `LINEAR_ACCESS_TOKEN`. Phase B migrates Linear onto the same
- * per-user Pipedream path as every other app. The env secret is still
- * referenced by `registerLinearWebhook` in `src/integrations/linear-api.ts`
- * (Phase D cleanup).
+ * using an env-sourced OAuth token; Phase B migrated Linear onto the
+ * same per-user Pipedream path as every other app, and Phase D dropped
+ * the env secret entirely.
  *
  * Testability: the class is a thin wrapper over `handleGatewayRequest`, a
  * pure async function that takes (request, env, props, options). Tests

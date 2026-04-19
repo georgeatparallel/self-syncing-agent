@@ -33,7 +33,6 @@ const fakeBridge = {
 
 const fakeEnv = {
   ANTHROPIC_API_KEY: "k",
-  LINEAR_ACCESS_TOKEN: "lin",
   LOADER: {} as WorkerLoader
 } as unknown as Env;
 

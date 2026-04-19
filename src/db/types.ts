@@ -10,12 +10,12 @@
  */
 
 /**
- * Supported integrations for V1. Narrow single-member union so tools and
- * runtime code are kept honest — adding a new integration requires
- * widening here AND supplying webhook-registration + credential logic to
- * match. V2 (Pipedream Connect) replaces this with a dynamic registry.
+ * Integration label stored on each sync row. Widened to `string` after
+ * Phase D — the agent can now target any app slug reachable through
+ * Pipedream Connect, and the value is free-form metadata rather than a
+ * closed enum. Kept as a named alias for readability at call sites.
  */
-export type Integration = "linear";
+export type Integration = string;
 
 /**
  * Shape of `this.sql` exposed by the Cloudflare Agents SDK on the Agent
