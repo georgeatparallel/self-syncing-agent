@@ -107,13 +107,10 @@ function mockFetcher(
     return response as unknown as typeof fetch;
   }
   return (async () =>
-    new Response(
-      response.body ?? JSON.stringify({ success: true, data: {} }),
-      {
-        status: response.status ?? 200,
-        headers: { "content-type": "application/json" }
-      }
-    )) as unknown as typeof fetch;
+    new Response(response.body ?? JSON.stringify({ success: true, data: {} }), {
+      status: response.status ?? 200,
+      headers: { "content-type": "application/json" }
+    })) as unknown as typeof fetch;
 }
 
 describe("scrapeToMarkdown", () => {
@@ -332,7 +329,9 @@ export class FirecrawlError extends Error {
 
 const SCRAPE_URL = "https://api.firecrawl.dev/v2/scrape";
 
-export async function scrapeToMarkdown(args: ScrapeArgs): Promise<ScrapeResult> {
+export async function scrapeToMarkdown(
+  args: ScrapeArgs
+): Promise<ScrapeResult> {
   const fetcher = args.fetcher ?? fetch;
 
   const req = new Request(SCRAPE_URL, {
@@ -378,7 +377,10 @@ export async function scrapeToMarkdown(args: ScrapeArgs): Promise<ScrapeResult> 
       typeof body === "object" && body && "error" in body
         ? String((body as { error: unknown }).error)
         : String(res.status);
-    throw new FirecrawlError("scrape_failed", `Firecrawl HTTP ${res.status}: ${detail}`);
+    throw new FirecrawlError(
+      "scrape_failed",
+      `Firecrawl HTTP ${res.status}: ${detail}`
+    );
   }
 
   // 2xx with {success: false} — Firecrawl's own error path.
@@ -406,10 +408,9 @@ export async function scrapeToMarkdown(args: ScrapeArgs): Promise<ScrapeResult> 
   const markdown = String((data as { markdown: unknown }).markdown);
   const metadata =
     typeof (data as { metadata?: unknown }).metadata === "object"
-      ? ((data as { metadata: Record<string, unknown> }).metadata)
+      ? (data as { metadata: Record<string, unknown> }).metadata
       : {};
-  const title =
-    typeof metadata.title === "string" ? metadata.title : null;
+  const title = typeof metadata.title === "string" ? metadata.title : null;
   const sourceUrl =
     typeof metadata.sourceURL === "string" ? metadata.sourceURL : args.url;
 
@@ -476,10 +477,9 @@ async function invoke(
   input: Parameters<NonNullable<ToolDef["execute"]>>[0]
 ) {
   // Tool#execute's second arg is the ToolCallOptions, which we don't use.
-  return (toolDef.execute as (
-    input: unknown,
-    options: unknown
-  ) => Promise<unknown>)(input, {});
+  return (
+    toolDef.execute as (input: unknown, options: unknown) => Promise<unknown>
+  )(input, {});
 }
 
 describe("fetch_docs tool", () => {
@@ -617,13 +617,11 @@ interface FetchDocsDeps {
   scrape?: ScrapeFn;
 }
 
-export function fetchDocsTool(
-  agent: ChatAgent,
-  deps: FetchDocsDeps = {}
-) {
+export function fetchDocsTool(agent: ChatAgent, deps: FetchDocsDeps = {}) {
   const scrape = deps.scrape ?? scrapeToMarkdown;
   return tool({
-    description: /* filled in by Task 3 — keep a minimal placeholder here */ "Fetch the full content of a single web page as markdown via Firecrawl. See system prompt for usage patterns.",
+    description:
+      /* filled in by Task 3 — keep a minimal placeholder here */ "Fetch the full content of a single web page as markdown via Firecrawl. See system prompt for usage patterns.",
     inputSchema: z.object({
       url: z
         .string()
@@ -799,7 +797,7 @@ description: `Fetch the full content of a single web page as markdown. Backed by
   - \`scrape_failed\`: Firecrawl couldn't fetch the page (404, rate limit on the upstream, JS-only page that even Firecrawl couldn't render, etc.).
   - \`unreachable\`: network-level failure between supervisor and Firecrawl.
 
-On \`scrape_failed\` or \`unreachable\`, fall back to \`web_search\` excerpts — don't give up on the question.`
+On \`scrape_failed\` or \`unreachable\`, fall back to \`web_search\` excerpts — don't give up on the question.`;
 ```
 
 ### System-prompt updates
@@ -862,6 +860,7 @@ In the dev server chat:
 Expected: agent calls `fetch_docs` with that URL, returns an answer that matches the actual doc — something like: "Stripe signs the string `<timestamp>.<payload>` where timestamp is the UNIX ms from the `t=` segment of `stripe-signature` and payload is the raw request body, separated by a literal period."
 
 Verify:
+
 - Agent invoked `fetch_docs`, not `web_search`.
 - Returned answer cites specifics that only appear in full docs (the period separator, the `t=` / `v1=` header segments, the replay-protection window).
 
@@ -876,6 +875,7 @@ Ask agent:
 > "Create a sync for Stripe webhooks. Track `payment_intent.succeeded` and `payment_intent.payment_failed` events. Use fetch_docs to find the exact verifySignature algorithm Stripe uses and the Stripe API endpoint for creating webhook endpoints."
 
 The agent should:
+
 1. `web_search("Stripe webhook endpoint API create")` → find the URL for the Stripe API webhooks reference.
 2. `fetch_docs(<stripe-api-endpoints-url>)` → read the endpoint shape.
 3. `web_search("Stripe webhook signature verification")` → find the signing docs.
@@ -885,6 +885,7 @@ The agent should:
 7. Verify the webhook appears in Stripe's dashboard.
 
 If you don't have a Stripe test account:
+
 - Level 1 is sufficient for the Loom.
 - Mention in the PR description / README that the tool CAN enable end-to-end onboarding of any integration, just limited by account access for demos.
 

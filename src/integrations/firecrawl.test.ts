@@ -15,13 +15,10 @@ function mockFetcher(
     return response as unknown as typeof fetch;
   }
   return (async () =>
-    new Response(
-      response.body ?? JSON.stringify({ success: true, data: {} }),
-      {
-        status: response.status ?? 200,
-        headers: { "content-type": "application/json" }
-      }
-    )) as unknown as typeof fetch;
+    new Response(response.body ?? JSON.stringify({ success: true, data: {} }), {
+      status: response.status ?? 200,
+      headers: { "content-type": "application/json" }
+    })) as unknown as typeof fetch;
 }
 
 describe("scrapeToMarkdown", () => {

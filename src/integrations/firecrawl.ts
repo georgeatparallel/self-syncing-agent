@@ -123,8 +123,7 @@ export async function scrapeToMarkdown(
     typeof rawMetadata === "object" && rawMetadata !== null
       ? (rawMetadata as Record<string, unknown>)
       : {};
-  const title =
-    typeof metadata.title === "string" ? metadata.title : null;
+  const title = typeof metadata.title === "string" ? metadata.title : null;
   const sourceUrl =
     typeof metadata.sourceURL === "string" ? metadata.sourceURL : args.url;
 
