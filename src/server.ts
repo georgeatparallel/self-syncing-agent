@@ -5,12 +5,19 @@ import {
   type OnChatMessageOptions,
   type ChatResponseResult
 } from "@cloudflare/ai-chat";
-import { convertToModelMessages, stepCountIs, streamText } from "ai";
+import {
+  convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+  stepCountIs,
+  streamText
+} from "ai";
 import { Hono } from "hono";
 import { applySchemaMigrations } from "./db/schema";
 import { buildContextMessages } from "./agent/context";
 import { buildTools } from "./agent/tools";
 import { SYSTEM_PROMPT } from "./agent/system-prompt";
+import { hasUnresolvedToolCalls } from "./agent/tool-call-pairing";
 import {
   getSyncById,
   listSyncs,
@@ -476,6 +483,30 @@ export class ChatAgent extends AIChatAgent<Env, { syncChangeTick: number }> {
       ...buildContextMessages(sql, this.name),
       ...(await convertToModelMessages(this.messages))
     ];
+
+    // Guard against @cloudflare/ai-chat's per-approval stream resume.
+    // When an assistant turn emits N parallel tool_use blocks that
+    // require approval, the library calls addToolResult on each
+    // individual approval click and re-triggers onChatMessage. During
+    // those intermediate states `messages` contains N tool_use blocks
+    // but fewer than N tool_result blocks, which Anthropic's API
+    // rejects as MissingToolResultsError (AI_MissingToolResultsError).
+    // The FINAL approval re-invokes onChatMessage with a complete set
+    // of tool_results and streamText runs normally — so here we return
+    // an empty UI-message stream and skip the LLM call entirely. Ideal
+    // fix is upstream in @cloudflare/ai-chat (batch approvals before
+    // resuming); this is the defensive server guard until that lands.
+    if (hasUnresolvedToolCalls(messages)) {
+      const stream = createUIMessageStream({
+        execute: () => {
+          // Intentionally empty: the client tolerates an empty SSE
+          // stream (content-type text/event-stream with immediate
+          // completion) and simply waits for the next onChatMessage
+          // trigger from the remaining tool approvals.
+        }
+      });
+      return createUIMessageStreamResponse({ stream });
+    }
 
     // Breakpoint b4: cache up through the new user message. Writes a
     // fresh entry each turn; next turn's request walks back within the
