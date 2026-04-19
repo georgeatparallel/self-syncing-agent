@@ -1,5 +1,5 @@
 import { env, SELF, runInDurableObject } from "cloudflare:test";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createSync } from "../src/db/syncs";
 import { logSyncError } from "../src/db/sync-errors";
 import type { NewSync, SqlTag } from "../src/db/types";
@@ -8,11 +8,26 @@ declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
-// Phase F, Task 1: the /api/user/:userId/* routes are now wrapped with
-// requireAuthAndUserIdMatch. Every SELF.fetch below has to carry the
-// Access header matching the path :userId or the request 401s/403s.
-// Using the same userId string for both sides satisfies the middleware.
-const CF_ACCESS_HEADER = "cf-access-authenticated-user-email";
+// Phase F Task 1 fix-up: /api/user/:userId/* routes now verify a
+// CF Access JWT. We mock `jose` so the middleware accepts the sentinel
+// header and returns a per-test sub (the same userId we put in the path,
+// so requireAuthAndUserIdMatch passes). The hoisted holder is needed
+// because vi.mock's factory runs above any top-level let/const.
+const authState = vi.hoisted(() => ({ sub: "" }));
+vi.mock("jose", () => ({
+  createRemoteJWKSet: vi.fn(() => "jwks-stub"),
+  jwtVerify: vi.fn(async () => ({
+    payload: { sub: authState.sub, email: `${authState.sub}@example.test` },
+    protectedHeader: {}
+  })),
+  errors: {}
+}));
+
+const CF_ACCESS_JWT_HEADER = "cf-access-jwt-assertion";
+function authHeaders(userId: string, extra: Record<string, string> = {}) {
+  authState.sub = userId;
+  return { [CF_ACCESS_JWT_HEADER]: "test.jwt.token", ...extra };
+}
 
 function seedSync(instance: unknown, overrides: Partial<NewSync> = {}): string {
   const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
@@ -41,7 +56,7 @@ describe("ops panel API", () => {
     const userId = `empty-${crypto.randomUUID()}`;
     const res = await SELF.fetch(
       `https://test.invalid/api/user/${userId}/syncs-summary`,
-      { headers: { [CF_ACCESS_HEADER]: userId } }
+      { headers: authHeaders(userId) }
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { syncs: unknown[] };
@@ -76,7 +91,7 @@ describe("ops panel API", () => {
 
     const res = await SELF.fetch(
       `https://test.invalid/api/user/${userId}/syncs-summary`,
-      { headers: { [CF_ACCESS_HEADER]: userId } }
+      { headers: authHeaders(userId) }
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -97,7 +112,7 @@ describe("ops panel API", () => {
     const userId = `detail-404-${crypto.randomUUID()}`;
     const res = await SELF.fetch(
       `https://test.invalid/api/user/${userId}/syncs/00000000-0000-0000-0000-000000000000/details`,
-      { headers: { [CF_ACCESS_HEADER]: userId } }
+      { headers: authHeaders(userId) }
     );
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: string };
@@ -152,7 +167,7 @@ describe("ops panel API", () => {
 
     const res = await SELF.fetch(
       `https://test.invalid/api/user/${userId}/syncs/${syncId!}/details`,
-      { headers: { [CF_ACCESS_HEADER]: userId } }
+      { headers: authHeaders(userId) }
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
