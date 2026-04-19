@@ -7,7 +7,7 @@
 **Architecture:**
 
 - New tool: `fetch_docs(url: string)` registered alongside `web_search` in `buildTools`. Pure read-side tool, no approval gate.
-- Firecrawl-backed. Firecrawl's `POST /v1/scrape` endpoint with `{formats: ["markdown"], onlyMainContent: true}` returns extracted main content as markdown, stripping navigation / footers / sidebars. Handles JS-rendered SPAs (which plain HTTP fetch cannot). Free tier (500 pages/mo) is plenty for a trial demo; ~$0.0015/page on the paid tier.
+- Firecrawl-backed. Firecrawl's `POST /v2/scrape` endpoint with `{formats: ["markdown"], onlyMainContent: true}` returns extracted main content as markdown, stripping navigation / footers / sidebars. Handles JS-rendered SPAs (which plain HTTP fetch cannot). Free tier (500 pages/mo) is plenty for a trial demo; ~$0.0015/page on the paid tier.
 - Tool runs in the ChatAgent (supervisor) isolate, not in a facet — so it uses direct `fetch`, no HttpGateway routing. `FIRECRAWL_API_KEY` is a new supervisor env secret.
 - Agent discipline enforced via system prompt + tool description:
   - **Use** for: signing algorithms, webhook-registration endpoint specs, OAuth scope requirements, rate-limit documentation, API reference pages when search excerpts aren't enough.
@@ -16,7 +16,7 @@
 - No caching layer in V1. Identical URLs fetched twice hit Firecrawl twice. Fine for demo; noted for Future Work.
 - No crawling (multi-page recursive fetches). Single-page scrape only. If the agent needs multiple pages of a large reference (Stripe's webhook event types), it calls `fetch_docs` once per page — deliberate, auditable.
 
-**Tech Stack:** Firecrawl REST API v1 (`https://api.firecrawl.dev/v1/scrape`), Cloudflare Workers `fetch` from supervisor isolate, Vitest with mocked `fetch` for unit tests.
+**Tech Stack:** Firecrawl REST API v2 (`https://api.firecrawl.dev/v2/scrape`), Cloudflare Workers `fetch` from supervisor isolate, Vitest with mocked `fetch` for unit tests.
 
 **Branch:** `feat/fetch-docs` (new branch off `main`; `feat/pipedream` is already merged).
 
@@ -37,7 +37,7 @@ Implementer should CONFIRM with the user that both dev + prod keys are set befor
 
 **New files:**
 
-- `src/integrations/firecrawl.ts` — low-level Firecrawl client. Single function `scrapeToMarkdown({apiKey, url, fetcher?})` that POSTs to `/v1/scrape`, parses the response, returns `{title, markdown, sourceUrl}` on success or throws a typed error. ~80 lines.
+- `src/integrations/firecrawl.ts` — low-level Firecrawl client. Single function `scrapeToMarkdown({apiKey, url, fetcher?})` that POSTs to `/v2/scrape`, parses the response, returns `{title, markdown, sourceUrl}` on success or throws a typed error. ~80 lines.
 - `src/integrations/firecrawl.test.ts` — unit tests with mocked fetcher: happy path (Firecrawl returns markdown), 401 (bad key), 402 (quota exhausted), 400 (bad URL from Firecrawl's perspective), 5xx retry-worthy upstream errors, malformed JSON response, network throw.
 - `src/agent/tools/read/fetch-docs.ts` — `fetch_docs` tool definition. Wraps `scrapeToMarkdown` with the `tool()` helper. URL validation (http/https only), error normalization (maps Firecrawl errors to tool-layer discriminated union).
 - `src/agent/tools/read/fetch-docs.test.ts` — tool-layer tests. Mocks the Firecrawl client, asserts tool return shape on happy path + each error branch. Assert URL validation rejects non-http URLs.
@@ -61,7 +61,7 @@ Implementer should CONFIRM with the user that both dev + prod keys are set befor
 - Create: `src/integrations/firecrawl.ts`
 - Create: `src/integrations/firecrawl.test.ts`
 
-**Context:** Tiny wrapper around `POST https://api.firecrawl.dev/v1/scrape`. Firecrawl's v1 scrape response shape:
+**Context:** Tiny wrapper around `POST https://api.firecrawl.dev/v2/scrape`. Firecrawl's v2 scrape response shape:
 
 ```jsonc
 // Success
@@ -149,7 +149,7 @@ describe("scrapeToMarkdown", () => {
     // Verify request shape.
     expect(fetcher).toHaveBeenCalledTimes(1);
     const sent = fetcher.mock.calls[0][0] as Request;
-    expect(sent.url).toBe("https://api.firecrawl.dev/v1/scrape");
+    expect(sent.url).toBe("https://api.firecrawl.dev/v2/scrape");
     expect(sent.method).toBe("POST");
     expect(sent.headers.get("authorization")).toBe(`Bearer ${API_KEY}`);
     const body = await sent.clone().json();
@@ -290,7 +290,7 @@ Expected: FAIL (module not found).
 // src/integrations/firecrawl.ts
 
 /**
- * Firecrawl API client — wraps POST /v1/scrape.
+ * Firecrawl API client — wraps POST /v2/scrape.
  * Used by the `fetch_docs` tool to pull clean markdown for a single URL.
  * Supervisor-isolate only (the tool runs in the ChatAgent DO); handlers
  * do not call this module.
@@ -330,7 +330,7 @@ export class FirecrawlError extends Error {
   }
 }
 
-const SCRAPE_URL = "https://api.firecrawl.dev/v1/scrape";
+const SCRAPE_URL = "https://api.firecrawl.dev/v2/scrape";
 
 export async function scrapeToMarkdown(args: ScrapeArgs): Promise<ScrapeResult> {
   const fetcher = args.fetcher ?? fetch;
@@ -431,7 +431,7 @@ Expected: clean.
 
 ```bash
 git add src/integrations/firecrawl.ts src/integrations/firecrawl.test.ts
-git commit -m "feat(firecrawl): API client for /v1/scrape with typed errors"
+git commit -m "feat(firecrawl): API client for /v2/scrape with typed errors"
 ```
 
 ---
@@ -952,7 +952,7 @@ gh pr create --title "feat: fetch_docs tool — close the contract-discovery gap
 
 - **Response caching.** Identical URLs fetched twice hit Firecrawl twice. For a trial demo this is fine (< 50 fetches across the whole session). Production would want a short-lived module-level LRU keyed on URL, TTL of an hour or so.
 - **Rate limiting / backoff.** Firecrawl's 402 (quota exhausted) returns a clean error today. A polite client would track recent auth_failed / quota_exhausted responses and back off before the next call. Skip for demo; noted for prod.
-- **Crawl mode.** Firecrawl also supports recursive crawling (`/v1/crawl`). Useful if the agent needs to read a whole docs site. Not needed now — the agent can choose specific URLs one at a time.
-- **PDF / non-HTML support.** Firecrawl handles PDFs via the same `/v1/scrape` endpoint. Our tool doesn't restrict by URL extension, so PDF URLs will work today if Firecrawl handles them. Untested; worth a note in the tool description if we confirm it works.
+- **Crawl mode.** Firecrawl also supports recursive crawling (`/v2/crawl`). Useful if the agent needs to read a whole docs site. Not needed now — the agent can choose specific URLs one at a time.
+- **PDF / non-HTML support.** Firecrawl handles PDFs via the same `/v2/scrape` endpoint. Our tool doesn't restrict by URL extension, so PDF URLs will work today if Firecrawl handles them. Untested; worth a note in the tool description if we confirm it works.
 - **Context7 for framework docs.** Firecrawl handles scraped web docs (Stripe, GitHub, Linear). For library/framework docs (React's API, Prisma's schema DSL), Context7 MCP is probably better because the content is pre-chunked and indexed. Could be added as a complementary tool — `fetch_docs` for open-web pages, `query_library_docs` for known-library references. Not urgent for the integration-registration use case; the trial is webhook-centric.
 - **Pagination for huge references.** If the agent fetches a 500KB page, it consumes a lot of output tokens. Consider adding an optional `max_chars` input that tells Firecrawl (or us, post-hoc) to truncate. For V1, let the agent manage its own budget by picking specific sub-pages.
