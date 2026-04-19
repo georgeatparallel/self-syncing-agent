@@ -118,7 +118,7 @@ async __unregisterWebhook(config) {
 
 - [ ] **Step 2: Add regex assertions**
 
-In `src/facet/bundle.test.ts`, find the test that asserts `__verifySignature` appears in the wrapper source (renamed in Phase C to "wrapper source exposes __query, __sqlExec, __verifySignature, and #ensureSchema"). Rename it again to include the two new methods, and add two new assertions:
+In `src/facet/bundle.test.ts`, find the test that asserts `__verifySignature` appears in the wrapper source (renamed in Phase C to "wrapper source exposes **query, **sqlExec, \_\_verifySignature, and #ensureSchema"). Rename it again to include the two new methods, and add two new assertions:
 
 ```ts
 expect(main).toMatch(/async __registerWebhook\(/);
@@ -169,6 +169,7 @@ Phase D inverts 3 and 4, and swaps the Linear-specific registerLinearWebhook for
 6. Return `{ok: true, sync_id, upstream_webhook_id: id}`.
 
 Rollback points:
+
 - `__supervisorPing` throws (compile error) → `agent.ctx.facets.delete(name)`, return `{ok: false, error: "facet_load_failed", detail}`.
 - `__registerWebhook` throws → `agent.ctx.facets.delete(name)`, return `{ok: false, error: "webhook_register_failed", detail}`.
 - `__registerWebhook` returns bad shape → same as throw.
@@ -301,8 +302,7 @@ if (sync.upstream_webhook_id) {
         id: string;
         label: string;
       }): Promise<
-        | { ok: true }
-        | { ok: false; reason: string; detail?: string }
+        { ok: true } | { ok: false; reason: string; detail?: string }
       >;
     }
   ).__unregisterWebhook({
@@ -664,6 +664,7 @@ rmdir src/integrations 2>/dev/null || true
 - [ ] **Step 3: Remove LINEAR_ACCESS_TOKEN from Env type**
 
 Read `worker-configuration.d.ts`. If `LINEAR_ACCESS_TOKEN: string` appears in the generated `Env` interface, either:
+
 - Run `PATH="$HOME/.nvm/versions/node/v22.22.2/bin:$PATH" npx wrangler types` to regenerate (if wrangler auto-generates it from secrets+vars), OR
 - Manually delete the line (if it's hand-written).
 
@@ -708,6 +709,7 @@ In chat:
 > "Delete the linear-high-urgent-issues sync."
 
 Approve when prompted. Expected:
+
 - delete_sync attaches the facet, calls `__unregisterWebhook`.
 - The legacy handler doesn't have `unregisterWebhook` OR it might (if you migrated it with the verifySignature update in Phase C). Whichever.
   - If no unregister export: wrapper returns `{ok: false, reason: "no_unregister_export"}`, delete_sync logs a sync_errors row ("webhook upstream cleanup skipped: no_unregister_export"), proceeds with local delete.
@@ -730,7 +732,7 @@ In chat:
 
 The agent should draft schema_ddl and handler_code in chat (all four exports, GitHub REST pattern). You approve. create_sync execute:
 
-1. Attach facet, __supervisorPing compiles the bundle.
+1. Attach facet, \_\_supervisorPing compiles the bundle.
 2. `facet.__registerWebhook({callbackUrl: "...PUBLIC_BASE_URL.../webhook/<userId>/<syncId>", label: "self-syncing-agent:<prefix>:<name>"})`.
    - Agent's registerWebhook POSTs to `https://api.github.com/repos/<owner>/<repo>/hooks`.
    - Request routes through HttpGateway → Pipedream proxy → GitHub with user's connected GitHub token.
@@ -745,6 +747,7 @@ Expected: tool call succeeds. Verify the webhook exists in the GitHub repo's set
 In that GitHub repo, open a new issue (e.g., "Phase D smoke test"). GitHub fires a webhook delivery.
 
 Watch the wrangler logs. Expected:
+
 - POST lands on `/webhook/<userId>/<syncId>`.
 - Supervisor's `handleWebhookDelivery` attaches facet, calls `__verifySignature(body, headers, secret)`.
 - Agent's verifySignature computes HMAC-SHA256 of body with the GitHub-provided secret, compares to `x-hub-signature-256` header. Should return true.
@@ -762,6 +765,7 @@ Expected: your newly-created issue appears.
 > "Delete the github-<name> sync."
 
 Approve. Expected:
+
 - delete_sync attaches facet, calls `__unregisterWebhook({id: <github webhook id>, label: ...})`.
 - Agent's unregisterWebhook DELETEs the webhook via GitHub API.
 - Returns `{ok: true}`.
@@ -786,7 +790,7 @@ git push origin feat/pipedream
 If anything in steps 2-6 fails, capture the wrangler logs, the browser console, and any returned tool-call error shape. Common failure modes:
 
 - **GitHub webhook create returns 404**: the user's connected GitHub account doesn't have access to the repo (maybe private + insufficient OAuth scopes, or wrong owner). Check the user's Pipedream GitHub app's granted permissions.
-- **__verifySignature returns false for real GitHub deliveries**: likely a header-name or encoding typo in the agent's code. GitHub uses `x-hub-signature-256: sha256=<hex>` (the `sha256=` prefix must be stripped before comparing hex).
+- **\_\_verifySignature returns false for real GitHub deliveries**: likely a header-name or encoding typo in the agent's code. GitHub uses `x-hub-signature-256: sha256=<hex>` (the `sha256=` prefix must be stripped before comparing hex).
 - **registerWebhook throws "secret too short"**: some GitHub tiers have minimum secret length requirements. Bump the generated secret to ≥32 chars.
 - **Facet attach fails with "compile error"**: syntax error in the agent's handler. Read the error detail from the tool call return — it includes the V8 error message.
 

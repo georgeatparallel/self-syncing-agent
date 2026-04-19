@@ -12,7 +12,6 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     ANTHROPIC_API_KEY: "anthro-stub",
     PARALLEL_API_KEY: "parallel-stub",
-    LINEAR_ACCESS_TOKEN: "linear-test-token",
     PIPEDREAM_PROJECT_ID: "proj_test",
     PIPEDREAM_CLIENT_ID: "client_test",
     PIPEDREAM_CLIENT_SECRET: "secret_test",
@@ -86,9 +85,9 @@ describe("handleGatewayRequest", () => {
     const sentReq = forwarder.mock.calls[0][0] as Request;
     expect(sentReq.url).toContain("api.pipedream.com/v1/connect/");
     expect(sentReq.url).toContain("account_id=apn_linear_1");
-    // The Linear path must NOT attach the old hardcoded
-    // `Bearer ${LINEAR_ACCESS_TOKEN}` — the only Authorization header
-    // present should be the Pipedream bearer access token.
+    // The Linear path must NOT attach any old hardcoded Linear-specific
+    // Authorization header — the only Authorization header present
+    // should be the Pipedream bearer access token.
     expect(sentReq.headers.get("Authorization")).toBe("Bearer pd_access_test");
   });
 
