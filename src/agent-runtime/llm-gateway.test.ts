@@ -32,9 +32,18 @@ const fakeBridge = {
   getSyncId: vi.fn().mockResolvedValue("s-1")
 };
 
+// Shared stub mock for ChatAgent DO. Individual tests override the
+// return value of listPipedreamAccounts when they care about its shape.
+const listPipedreamAccountsMock = vi.fn().mockResolvedValue([]);
+const chatAgentStub = { listPipedreamAccounts: listPipedreamAccountsMock };
+
 const fakeEnv = {
   ANTHROPIC_API_KEY: "k",
-  LOADER: {} as WorkerLoader
+  LOADER: {} as WorkerLoader,
+  ChatAgent: {
+    idFromName: (n: string) => n,
+    get: () => chatAgentStub
+  }
 } as unknown as Env;
 
 describe("runAgent", () => {
@@ -42,6 +51,7 @@ describe("runAgent", () => {
     vi.clearAllMocks();
     fakeBridge.getUserId.mockResolvedValue("u-1");
     fakeBridge.getSyncId.mockResolvedValue("s-1");
+    listPipedreamAccountsMock.mockResolvedValue([]);
   });
 
   it("returns the model's final text on a tool-free response", async () => {
@@ -153,6 +163,57 @@ describe("runAgent", () => {
     });
     await runAgent(baseReq, fakeBridge as never, fakeEnv);
     expect(fakeBridge.sqlExec).toHaveBeenCalledWith("SELECT 1");
+  });
+
+  it("prepends a <connected_accounts> ambient-context message before the caller's messages", async () => {
+    listPipedreamAccountsMock.mockResolvedValueOnce([
+      {
+        app_slug: "slack",
+        account_id: "apn_1",
+        user_id: "u-1",
+        connected_at: 1700000000000
+      }
+    ]);
+    vi.mocked(generateText).mockResolvedValue({
+      text: "ok",
+      steps: [],
+      usage: { inputTokens: 0, outputTokens: 0 }
+    } as unknown as Awaited<ReturnType<typeof generateText>>);
+
+    await runAgent(baseReq, fakeBridge as never, fakeEnv);
+
+    expect(listPipedreamAccountsMock).toHaveBeenCalledWith("u-1");
+    const call = vi.mocked(generateText).mock.calls[0][0] as unknown as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(call.messages.length).toBe(baseReq.messages.length + 1);
+    const first = call.messages[0];
+    expect(first.role).toBe("user");
+    expect(first.content).toContain("<connected_accounts>");
+    expect(first.content).toContain("slack");
+    // Caller's messages come after the ambient block in the same order.
+    expect(call.messages[1]).toEqual(baseReq.messages[0]);
+  });
+
+  it("falls back to an empty <connected_accounts> block when the ChatAgent RPC throws", async () => {
+    listPipedreamAccountsMock.mockRejectedValueOnce(
+      new Error("DO unavailable")
+    );
+    vi.mocked(generateText).mockResolvedValue({
+      text: "ok",
+      steps: [],
+      usage: { inputTokens: 0, outputTokens: 0 }
+    } as unknown as Awaited<ReturnType<typeof generateText>>);
+
+    const result = await runAgent(baseReq, fakeBridge as never, fakeEnv);
+    expect(result.ok).toBe(true);
+    const call = vi.mocked(generateText).mock.calls[0][0] as unknown as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(call.messages[0].content).toContain("<connected_accounts>");
+    expect(call.messages[0].content).toContain(
+      "No Pipedream integrations connected"
+    );
   });
 
   it("wires fetch tool to handleGatewayRequest (supervisor-side, no facet bounce)", async () => {

@@ -4,11 +4,39 @@ import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { resolveModelId } from "./models";
 import { handleGatewayRequest } from "../proxy/http-gateway";
+import { formatConnectedAccounts } from "../agent/context";
+import type { ConnectedAccount } from "../db/types";
 import type { AgentRequest, AgentResult } from "./types";
 import type { FacetAgentBridge } from "./facet-agent-bridge";
 
 const MAX_STEPS_HARD_CAP = 15;
 const DEFAULT_STEPS = 8;
+
+/**
+ * Live-read the user's connected Pipedream accounts so the subagent
+ * can pick the correct `X-Pd-App` slug on each fetch. Same pattern
+ * HttpGateway uses for resolveEgress — re-run per generation, not
+ * stamped on props, so a user connecting a new app mid-session is
+ * reflected on the NEXT subagent turn without a bundle bump.
+ *
+ * If userId is missing (no user scope, diagnostic call) or the RPC
+ * fails, we fall through to an empty list and let the gateway's
+ * `account_not_connected` 403 surface the problem downstream.
+ */
+async function buildSubagentContext(env: Env, userId: string): Promise<string> {
+  if (!userId) return formatConnectedAccounts([]);
+  try {
+    const stub = env.ChatAgent.get(env.ChatAgent.idFromName(userId));
+    const accounts = await (
+      stub as unknown as {
+        listPipedreamAccounts: (u: string) => Promise<ConnectedAccount[]>;
+      }
+    ).listPipedreamAccounts(userId);
+    return formatConnectedAccounts(accounts);
+  } catch {
+    return formatConnectedAccounts([]);
+  }
+}
 
 /**
  * Adapter between FacetAgentBridge (supervisor-side sql/fetch surface)
@@ -108,8 +136,21 @@ Returns on SQLite error:
       }
     }),
     fetch: tool({
-      description:
-        "Make an HTTP request through the supervisor's credential-injecting proxy. Upstream auth is injected automatically for known hosts (e.g., api.linear.app); unknown hosts return 403.",
+      description: `Make an HTTP request through the user's credential-injecting proxy.
+
+**Every fetch MUST set the \`X-Pd-App\` header** to one of the user's connected app slugs (see the \`<connected_accounts>\` block at the top of your context — use the slug verbatim). The gateway uses this header to pick which connected Pipedream account's OAuth token to inject via the Pipedream Connect proxy.
+
+Host constraints: the target hostname must be declared in the calling sync's \`api_hosts\` (set at create_sync by the main agent). Undeclared hosts 403 \`unknown_host\`. SSRF denylist blocks private IPs, cloud metadata (169.254.169.254), localhost, etc. — 403 \`denied_host\`.
+
+Returns \`{ status, body }\` on both success and 4xx/5xx; the gateway itself never throws. 403 responses carry a structured error code in the body (\`denied_host\`, \`missing_app_header\`, \`unknown_host\`, \`account_not_connected\`, \`sync_not_found\`) — inspect and self-correct (e.g., retry with a correct slug in X-Pd-App).
+
+Example:
+  fetch({
+    url: "https://api.slack.com/chat.postMessage",
+    method: "POST",
+    headers: { "X-Pd-App": "slack", "Content-Type": "application/json" },
+    body: JSON.stringify({ channel: "C123", text: "hello" })
+  })`,
       inputSchema: z.object({
         url: z.string(),
         method: z.string().default("GET"),
@@ -136,7 +177,14 @@ Module contract: ES module source that MUST export \`async function runInSync(fa
 - \`await facet.__query(sql)\` → \`{ ok: true, rows } | { ok: false, error }\`. Read-only: executes the statement and returns all result rows.
 - \`await facet.__sqlExec(sql, ...bindings)\` → \`{ ok: true, rowsWritten, rowsRead } | { ok: false, error }\`. Arbitrary SQL (INSERT / UPDATE / DELETE / DDL); rows are not returned — use \`__query\` for reads.
 
-\`fetch\` — global fetch in the exec isolate. Routes through the same auth-injecting proxy the handler and \`fetch\` tool use: upstream token is injected automatically for known hosts (currently \`api.linear.app\`); unknown hosts return 403.
+\`fetch\` — global fetch in the exec isolate. Every fetch goes through the user's credential-injecting proxy. **Every fetch MUST set the \`X-Pd-App\` header** to one of the user's connected app slugs (see \`<connected_accounts>\` block in your context). The gateway injects that app's OAuth token via Pipedream Connect. Hosts must be in the calling sync's \`api_hosts\` (declared at create_sync). Undeclared hosts 403 \`unknown_host\`. SSRF denylist blocks private IPs / metadata / .internal / .local → 403 \`denied_host\`. Missing \`X-Pd-App\` → 403 \`missing_app_header\`.
+
+Example fetch from inside runInSync:
+  await fetch("https://api.slack.com/chat.postMessage", {
+    method: "POST",
+    headers: { "X-Pd-App": "slack", "Content-Type": "application/json" },
+    body: JSON.stringify({ channel, text })
+  });
 
 Limits and conventions:
 - Do NOT \`import\` anything beyond these two parameters. Runtime globals \`crypto\`, \`Response\`, etc. are available but npm packages are not.
@@ -165,11 +213,21 @@ Returns:
     })
   };
 
+  // Prepend a `<connected_accounts>` ambient-context message so the
+  // subagent knows which X-Pd-App slugs are valid. Live-read per
+  // generation (not stamped on props) — no stale-bundle trap. Matches
+  // the block the main agent already receives via buildContextMessages.
+  const ambientContext = await buildSubagentContext(env, userId);
+  const augmentedMessages = [
+    { role: "user" as const, content: ambientContext },
+    ...request.messages
+  ];
+
   try {
     const result = await generateText({
       model: anthropic(modelId),
       system: request.system,
-      messages: request.messages,
+      messages: augmentedMessages,
       tools,
       stopWhen: stepCountIs(steps)
     });
