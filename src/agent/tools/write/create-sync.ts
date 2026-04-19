@@ -2,13 +2,24 @@ import { tool } from "ai";
 import { z } from "zod";
 import type { ChatAgent } from "../../../server";
 import { createSync, getSyncByName } from "../../../db/syncs";
-import {
-  registerLinearWebhook,
-  unregisterLinearWebhook,
-  LinearApiError
-} from "../../../integrations/linear-api";
 import { attachFacet } from "../../../facet/loader";
-import type { NewSync } from "../../../db/types";
+import type { NewSync, Sync, Integration } from "../../../db/types";
+
+// Typed RPC surface for the facet's Phase D methods. The cast is local to
+// this file — matches the pattern used elsewhere (query-sync.ts,
+// update-sync.ts, server.ts) for facet RPCs that aren't on the generic
+// DurableObjectStub type.
+interface FacetRegisterRpc {
+  __supervisorPing(): Promise<void>;
+  __registerWebhook(config: {
+    callbackUrl: string;
+    label: string;
+  }): Promise<{ id: string; secret: string }>;
+  __unregisterWebhook(config: {
+    id: string;
+    label: string;
+  }): Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
+}
 
 export function createSyncTool(agent: ChatAgent) {
   return tool({
@@ -94,13 +105,10 @@ For unfamiliar integrations or resource types: use the probe loop (described in 
           "User-visible sync label. Must be unique per user. Also used as the facet's name. Prefix throwaway probe syncs with 'probe-' so they're obviously disposable."
         ),
       integration: z
-        .enum(["linear"])
-        .describe("Upstream integration identifier."),
-      resource_types: z
-        .array(z.string().min(1))
+        .string()
         .min(1)
         .describe(
-          "Upstream resource types to subscribe the webhook to. Pick the minimal set that covers the user's ask — extra types just wake the facet for no-op deliveries. Look up valid values per integration via web_search if unsure."
+          "Human-readable label for the upstream service (e.g., 'linear', 'github', 'slack'). Freeform — used for UI display and ambient context, not as a code selector. Use a consistent slug across the user's sync list."
         ),
       schema_ddl: z
         .string()
@@ -123,21 +131,17 @@ For unfamiliar integrations or resource types: use the probe loop (described in 
     execute: async ({
       name,
       integration,
-      resource_types,
       schema_ddl,
       handler_code,
       filter_description
     }): Promise<
-      | { ok: true; sync_id: string; linear_webhook_id: string }
+      | { ok: true; sync_id: string; upstream_webhook_id: string }
       | { ok: false; error: string; detail: string }
     > => {
       const sql = agent.sql.bind(agent);
       const userId = agent.name;
 
-      // 0. Misconfiguration guard: PUBLIC_BASE_URL must be set to a public
-      //    URL before Linear can reach our webhooks. Catching here turns a
-      //    mysterious "Linear rejected the URL" error into an actionable
-      //    ops error the user can explain to whoever deployed the worker.
+      // 0. Misconfiguration guard.
       if (!agent.env.PUBLIC_BASE_URL) {
         return {
           ok: false,
@@ -147,7 +151,7 @@ For unfamiliar integrations or resource types: use the probe loop (described in 
         };
       }
 
-      // 1. Uniqueness check (friendly error before we start doing real work)
+      // 1. Uniqueness check.
       if (getSyncByName(sql, name)) {
         return {
           ok: false,
@@ -157,74 +161,53 @@ For unfamiliar integrations or resource types: use the probe loop (described in 
       }
 
       const syncId = crypto.randomUUID();
-      const webhookUrl = `${agent.env.PUBLIC_BASE_URL}/webhook/${userId}/${syncId}`;
-      const webhookLabel = `self-syncing-agent:${userId.slice(0, 8)}:${name}`;
+      const callbackUrl = `${agent.env.PUBLIC_BASE_URL}/webhook/${userId}/${syncId}`;
+      const label = `self-syncing-agent:${userId.slice(0, 8)}:${name}`;
 
-      // 2. Register webhook with Linear (this is the network-touching step;
-      //    if it fails we haven't touched any local state yet)
-      let registered;
-      try {
-        registered = await registerLinearWebhook(
-          agent.env.LINEAR_ACCESS_TOKEN,
-          webhookUrl,
-          resource_types,
-          webhookLabel
-        );
-      } catch (e) {
-        if (e instanceof LinearApiError) {
-          return { ok: false, error: e.code, detail: e.message };
-        }
-        throw e;
-      }
-
-      // 3. Build the NewSync record and persist. If this throws (e.g., UNIQUE
-      //    name check lost a race), roll back the upstream webhook.
+      // 2. Build a PRELIMINARY NewSync with placeholder webhook_secret +
+      //    upstream_webhook_id. The facet bundle doesn't bake either of
+      //    these into generated code (verified in Task 2 Step 1 against
+      //    src/facet/bundle.ts — only schema_ddl, handler_code, and
+      //    userId end up in the loaded modules) — the secret is a runtime
+      //    arg to __verifySignature; the upstream id is only used by
+      //    delete_sync. So the preliminary attach is safe.
       const codeId = `sync:${syncId}:v1`;
-      const newSync: NewSync = {
+      const preliminarySync: NewSync = {
         id: syncId,
         name,
-        integration,
+        // `integration` is now a free-form string on the input, but
+        // NewSync.integration is still typed as the narrow `Integration`
+        // union. Cast at the boundary — Phase D intentionally widens the
+        // agent-visible label; a follow-up can widen the DB type if we
+        // want stricter tracking.
+        integration: integration as Integration,
         handler_code,
         schema_ddl,
         filter_description: filter_description ?? null,
-        webhook_secret: registered.secret,
-        upstream_webhook_id: registered.id,
+        webhook_secret: "",
+        upstream_webhook_id: "",
         code_id: codeId
       };
 
-      let created;
+      // 3. Attach + ping the facet to force Worker Loader compilation. If
+      //    handler.js has a syntax error or is missing required exports,
+      //    __supervisorPing rejects here and we bail before any network
+      //    call to the upstream.
+      const facet = attachFacet(
+        agent.env,
+        agent.ctx.facets,
+        preliminarySync as unknown as Sync,
+        userId
+      );
       try {
-        created = createSync(sql, newSync);
+        await (facet as unknown as FacetRegisterRpc).__supervisorPing();
       } catch (e) {
-        // Rollback step 2.
-        await safeUnregister(agent.env.LINEAR_ACCESS_TOKEN, registered.id);
-        return {
-          ok: false,
-          error: "persist_failed",
-          detail: e instanceof Error ? e.message : String(e)
-        };
-      }
-
-      // 4. Attach the facet and force Worker Loader to compile the bundle.
-      //    If the agent's handler.js has a syntax error or is missing the
-      //    handleWebhook export, the ping call rejects and we roll back
-      //    both the DB row and the upstream webhook. Schema application
-      //    stays on the fetch path — the first real webhook will apply it.
-      try {
-        const facet = attachFacet(agent.env, agent.ctx.facets, created, userId);
-        await (
-          facet as unknown as { __supervisorPing(): Promise<void> }
-        ).__supervisorPing();
-      } catch (e) {
-        // Rollback step 3 (DB) and step 2 (Linear).
         try {
           agent.ctx.facets.delete(name);
         } catch {
           // facets.delete throws if the facet never actually started;
-          // swallow since our DB row still needs cleanup.
+          // tolerate because the primary error is the compile failure.
         }
-        sql`DELETE FROM syncs WHERE id = ${syncId}`;
-        await safeUnregister(agent.env.LINEAR_ACCESS_TOKEN, registered.id);
         return {
           ok: false,
           error: "facet_load_failed",
@@ -232,28 +215,87 @@ For unfamiliar integrations or resource types: use the probe loop (described in 
         };
       }
 
+      // 4. Call the handler's registerWebhook to register the upstream
+      //    webhook. The facet's fetch routes through HttpGateway →
+      //    Pipedream proxy, so auth is injected automatically for
+      //    Pipedream-connected apps. If the account isn't connected, the
+      //    handler's fetch() call will get a 403 from HttpGateway and the
+      //    handler should surface that as a thrown Error.
+      let registered: { id: string; secret: string };
+      try {
+        const raw = await (
+          facet as unknown as FacetRegisterRpc
+        ).__registerWebhook({
+          callbackUrl,
+          label
+        });
+        if (
+          !raw ||
+          typeof raw !== "object" ||
+          typeof (raw as { id?: unknown }).id !== "string" ||
+          typeof (raw as { secret?: unknown }).secret !== "string" ||
+          (raw as { id: string }).id.length === 0 ||
+          (raw as { secret: string }).secret.length === 0
+        ) {
+          throw new Error(
+            `registerWebhook returned invalid shape — expected { id: string, secret: string }, got: ${JSON.stringify(raw)}`
+          );
+        }
+        registered = raw;
+      } catch (e) {
+        try {
+          agent.ctx.facets.delete(name);
+        } catch {
+          // Tolerate — the register failure is the primary error.
+        }
+        return {
+          ok: false,
+          error: "webhook_register_failed",
+          detail: e instanceof Error ? e.message : String(e)
+        };
+      }
+
+      // 5. Persist the DB row with the real webhook_secret +
+      //    upstream_webhook_id returned by the handler.
+      const finalSync: NewSync = {
+        ...preliminarySync,
+        webhook_secret: registered.secret,
+        upstream_webhook_id: registered.id
+      };
+
+      try {
+        createSync(sql, finalSync);
+      } catch (e) {
+        // Persist failed after registerWebhook succeeded. Best-effort
+        // unregister upstream so we don't leave a dangling webhook
+        // pointing at a sync that doesn't exist locally. Errors from
+        // __unregisterWebhook are tolerated — we still want to surface
+        // the original persist_failed error.
+        try {
+          await (facet as unknown as FacetRegisterRpc).__unregisterWebhook({
+            id: registered.id,
+            label
+          });
+        } catch {
+          // Swallow — the original persist error is what matters.
+        }
+        try {
+          agent.ctx.facets.delete(name);
+        } catch {
+          // Tolerate.
+        }
+        return {
+          ok: false,
+          error: "persist_failed",
+          detail: e instanceof Error ? e.message : String(e)
+        };
+      }
+
       return {
         ok: true,
         sync_id: syncId,
-        linear_webhook_id: registered.id
+        upstream_webhook_id: registered.id
       };
     }
   });
-}
-
-async function safeUnregister(
-  accessToken: string,
-  webhookId: string
-): Promise<void> {
-  try {
-    await unregisterLinearWebhook(accessToken, webhookId);
-  } catch (e) {
-    // Rollback best-effort — the user gets an error message about the
-    // original failure; the orphaned Linear webhook can be cleaned up
-    // out-of-band via Linear UI if this ever happens in practice.
-    console.error(
-      `safeUnregister: failed to unregister ${webhookId}:`,
-      e instanceof Error ? e.message : e
-    );
-  }
 }
