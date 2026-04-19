@@ -46,9 +46,25 @@ Two tags appear as user-role messages at the start of every turn — system-inje
    - **You know it** if you've already shipped a working handler for this integration + resource type in a prior sync, the user handed you a sample payload, or a \`web_search\` returned clear current docs.
    - **You don't know it** if this is a new integration for the user, a new resource type on a familiar integration, or \`<sync_errors>\` is full of payload-parsing errors from a previous attempt.
 
-3. **If you know the shape**: draft \`schema_ddl\` and \`handler_code\` in chat as two code blocks (one-line explanation each), then call \`create_sync\`. The approval dialog shows them again.
+3. **Before drafting the handler, enumerate \`api_hosts\`.** The egress gateway default-denies hosts outside this sync's declared \`api_hosts\`. Use \`fetch_docs\` on the upstream's API reference to enumerate every hostname your \`registerWebhook\` + \`handleWebhook\` code will fetch (main API endpoints, webhook registration, CDN, signature-verification callbacks — everything). Pass them as \`api_hosts\` on \`create_sync\` so the user sees + approves the full egress surface.
 
-4. **If you don't**: use the probe loop below.
+   **Every handler fetch must set \`X-Pd-App: <slug>\`** where \`<slug>\` is one of the user's connected app slugs from the \`<connected_accounts>\` context block above. The gateway uses this header to pick which OAuth token to inject via Pipedream Connect. Cross-app is allowed as long as both the host AND the slug are in their respective approved lists.
+
+   Example handler fetch:
+
+   \`\`\`ts
+   await fetch("https://api.slack.com/chat.postMessage", {
+     method: "POST",
+     headers: { "X-Pd-App": "slack", "Content-Type": "application/json" },
+     body: JSON.stringify({ channel, text })
+   });
+   \`\`\`
+
+   If the user refuses the \`api_hosts\` list at approval, revise and resubmit with a trimmed list — do not try to bypass the allowlist. The full egress contract (runtime error codes, cross-app semantics) lives in \`create_sync\`'s tool description.
+
+4. **If you know the shape**: draft \`schema_ddl\` and \`handler_code\` in chat as two code blocks (one-line explanation each), then call \`create_sync\`. The approval dialog shows them again.
+
+5. **If you don't**: use the probe loop below.
 
 ## The probe loop — for unfamiliar integrations
 

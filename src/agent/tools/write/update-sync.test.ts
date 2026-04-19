@@ -33,7 +33,7 @@ function installFakeFacets(instance: unknown, facets: FakeFacets): () => void {
   };
 }
 
-function seedSync(instance: unknown): Sync {
+function seedSync(instance: unknown, overrides: Partial<NewSync> = {}): Sync {
   const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
   const id = crypto.randomUUID();
   const input: NewSync = {
@@ -46,7 +46,8 @@ function seedSync(instance: unknown): Sync {
     filter_description: null,
     webhook_secret: "s",
     upstream_webhook_id: "wh_test_abc",
-    code_id: `sync:${id}:v1`
+    code_id: `sync:${id}:v1`,
+    ...overrides
   };
   createSync(sql, input);
   return getSyncById(sql, id)!;
@@ -490,6 +491,138 @@ describe("update_sync", () => {
 
         // Last ping was v1 and succeeded (ping didn't throw for v1-phase).
         expect(pings.at(-1)).toBe(`sync:${seeded.id}:v1`);
+      } finally {
+        restoreFacets();
+      }
+    });
+  });
+
+  it("api_hosts: replaces the existing list when a new array is provided", async () => {
+    const stub = env.ChatAgent.get(env.ChatAgent.idFromName("u-hosts-replace"));
+    await runInDurableObject(stub, async (instance) => {
+      await (
+        instance as never as { setName: (n: string) => Promise<void> }
+      ).setName("u-hosts-replace");
+      const seeded = seedSync(instance, { api_hosts: ["api.old.com"] });
+      expect(seeded.api_hosts).toEqual(["api.old.com"]);
+
+      const restoreFacets = installFakeFacets(instance, {
+        get(_name, cb) {
+          void Promise.resolve(cb()).catch(() => {});
+          return {
+            fetch: async () => new Response("ok"),
+            __sqlExec: async () => ({ ok: true, rowsWritten: 0, rowsRead: 0 }),
+            __supervisorPing: async () => {}
+          };
+        },
+        abort: () => {},
+        delete: () => {}
+      });
+
+      try {
+        const tool = updateSyncTool(instance as never);
+        const res = await tool.execute!(
+          {
+            sync_id: seeded.id,
+            api_hosts: ["api.new.com"]
+          },
+          {} as never
+        );
+
+        expect(res).toEqual({ ok: true, new_version: 2 });
+
+        const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
+        const updated = getSyncById(sql, seeded.id)!;
+        expect(updated.api_hosts).toEqual(["api.new.com"]);
+      } finally {
+        restoreFacets();
+      }
+    });
+  });
+
+  it("api_hosts: preserves the existing list when the field is omitted", async () => {
+    const stub = env.ChatAgent.get(
+      env.ChatAgent.idFromName("u-hosts-preserve")
+    );
+    await runInDurableObject(stub, async (instance) => {
+      await (
+        instance as never as { setName: (n: string) => Promise<void> }
+      ).setName("u-hosts-preserve");
+      const seeded = seedSync(instance, { api_hosts: ["api.old.com"] });
+
+      const restoreFacets = installFakeFacets(instance, {
+        get(_name, cb) {
+          void Promise.resolve(cb()).catch(() => {});
+          return {
+            fetch: async () => new Response("ok"),
+            __sqlExec: async () => ({ ok: true, rowsWritten: 0, rowsRead: 0 }),
+            __supervisorPing: async () => {}
+          };
+        },
+        abort: () => {},
+        delete: () => {}
+      });
+
+      try {
+        const tool = updateSyncTool(instance as never);
+        // Update handler_code only; omit api_hosts entirely.
+        const res = await tool.execute!(
+          {
+            sync_id: seeded.id,
+            handler_code:
+              "export async function handleWebhook(){ return new Response('v2'); }"
+          },
+          {} as never
+        );
+
+        expect(res).toEqual({ ok: true, new_version: 2 });
+
+        const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
+        const updated = getSyncById(sql, seeded.id)!;
+        expect(updated.api_hosts).toEqual(["api.old.com"]);
+      } finally {
+        restoreFacets();
+      }
+    });
+  });
+
+  it("api_hosts: explicit empty array clears the list (every subsequent fetch 403s)", async () => {
+    const stub = env.ChatAgent.get(env.ChatAgent.idFromName("u-hosts-empty"));
+    await runInDurableObject(stub, async (instance) => {
+      await (
+        instance as never as { setName: (n: string) => Promise<void> }
+      ).setName("u-hosts-empty");
+      const seeded = seedSync(instance, { api_hosts: ["api.old.com"] });
+      expect(seeded.api_hosts).toEqual(["api.old.com"]);
+
+      const restoreFacets = installFakeFacets(instance, {
+        get(_name, cb) {
+          void Promise.resolve(cb()).catch(() => {});
+          return {
+            fetch: async () => new Response("ok"),
+            __sqlExec: async () => ({ ok: true, rowsWritten: 0, rowsRead: 0 }),
+            __supervisorPing: async () => {}
+          };
+        },
+        abort: () => {},
+        delete: () => {}
+      });
+
+      try {
+        const tool = updateSyncTool(instance as never);
+        const res = await tool.execute!(
+          {
+            sync_id: seeded.id,
+            api_hosts: []
+          },
+          {} as never
+        );
+
+        expect(res).toEqual({ ok: true, new_version: 2 });
+
+        const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
+        const updated = getSyncById(sql, seeded.id)!;
+        expect(updated.api_hosts).toEqual([]);
       } finally {
         restoreFacets();
       }

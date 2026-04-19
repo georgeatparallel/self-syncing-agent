@@ -363,6 +363,80 @@ describe("createSyncTool", () => {
     });
   });
 
+  it("persists declared api_hosts on the sync row", async () => {
+    const stub = getStub("create-api-hosts");
+    const userName = "create-api-hosts";
+
+    await runInDurableObject(stub, async (instance) => {
+      await ensureReady(instance, userName);
+      const record = freshRecord();
+      const restoreFacets = installFakeFacets(instance, makeFakeFacets(record));
+
+      try {
+        const tools = createSyncTool(instance);
+        const result = await tools.execute!(
+          {
+            name: "stripe-events",
+            integration: "stripe",
+            schema_ddl: SAMPLE_SCHEMA,
+            handler_code: SAMPLE_HANDLER,
+            api_hosts: ["api.stripe.com", "files.stripe.com"]
+          },
+          {} as never
+        );
+
+        if (!("ok" in result) || result.ok !== true) {
+          throw new Error(
+            `expected ok: true, got: ${JSON.stringify(result, null, 2)}`
+          );
+        }
+        const sql = instance.sql.bind(instance);
+        const persisted = getSyncById(sql, result.sync_id)!;
+        expect(persisted.api_hosts).toEqual([
+          "api.stripe.com",
+          "files.stripe.com"
+        ]);
+      } finally {
+        restoreFacets();
+      }
+    });
+  });
+
+  it("defaults api_hosts to [] when the agent omits the field", async () => {
+    const stub = getStub("create-api-hosts-default");
+    const userName = "create-api-hosts-default";
+
+    await runInDurableObject(stub, async (instance) => {
+      await ensureReady(instance, userName);
+      const record = freshRecord();
+      const restoreFacets = installFakeFacets(instance, makeFakeFacets(record));
+
+      try {
+        const tools = createSyncTool(instance);
+        const result = await tools.execute!(
+          {
+            name: "no-hosts",
+            integration: "linear",
+            schema_ddl: SAMPLE_SCHEMA,
+            handler_code: SAMPLE_HANDLER
+          },
+          {} as never
+        );
+
+        if (!("ok" in result) || result.ok !== true) {
+          throw new Error(
+            `expected ok: true, got: ${JSON.stringify(result, null, 2)}`
+          );
+        }
+        const sql = instance.sql.bind(instance);
+        const persisted = getSyncById(sql, result.sync_id)!;
+        expect(persisted.api_hosts).toEqual([]);
+      } finally {
+        restoreFacets();
+      }
+    });
+  });
+
   it("rolls back on persist failure: __unregisterWebhook called with just-registered id", async () => {
     const stub = getStub("create-persist-fail");
     const userName = "create-persist-fail";
