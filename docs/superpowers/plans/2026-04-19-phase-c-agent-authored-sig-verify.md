@@ -223,11 +223,12 @@ function splitStatements(ddl) {
 
 - [ ] **Step 2: Add regex assertion to bundle.test.ts**
 
-Find the test block that already asserts `__query` and `__sqlExec` appear in the wrapper (around line 85 of `src/facet/bundle.test.ts`, test name "wrapper source exposes __query, __sqlExec, and #ensureSchema"). Rename the test and add two new assertions:
+Find the test block that already asserts `__query` and `__sqlExec` appear in the wrapper (around line 85 of `src/facet/bundle.test.ts`, test name "wrapper source exposes **query, **sqlExec, and #ensureSchema"). Rename the test and add two new assertions:
 
 ```ts
 it("wrapper source exposes __query, __sqlExec, __verifySignature, and #ensureSchema", () => {
-  const handlerCode = "export async function handleWebhook(){ return new Response('ok'); }";
+  const handlerCode =
+    "export async function handleWebhook(){ return new Response('ok'); }";
   const bundle = buildFacetBundle({
     schemaDdl: "CREATE TABLE x (id TEXT);",
     handlerCode
@@ -510,9 +511,11 @@ And the inline RPC type annotation changes from `sig: string | null` to `headers
 installFakeFacets(instance, {
   get() {
     return {
-      fetch: async (req) => { /* ... */ },
+      fetch: async (req) => {
+        /* ... */
+      },
       __supervisorPing: async () => {},
-      __verifySignature: verifyLinearHmac  // real HMAC check against headers + secret
+      __verifySignature: verifyLinearHmac // real HMAC check against headers + secret
     };
   },
   abort: () => {},
@@ -523,7 +526,7 @@ installFakeFacets(instance, {
 For the "returns 401 when signature does not match" test, swap to a fake that rejects:
 
 ```ts
-__verifySignature: async () => false
+__verifySignature: async () => false;
 ```
 
 Actually no — the existing "bad signature" tests already produce a bad HMAC (they sign a DIFFERENT body). If the fake's `__verifySignature` is `verifyLinearHmac`, it will correctly return false for the bad signature. Prefer using the real verifier in all tests; leaves only one code path exercised.
@@ -538,7 +541,9 @@ const sql = (
 ).sql.bind(instance) as never;
 const errors = listSyncErrors(sql, syncId, 10);
 expect(errors).toHaveLength(1);
-expect(errors[0].error_message).toBe("signature verification rejected by handler");
+expect(errors[0].error_message).toBe(
+  "signature verification rejected by handler"
+);
 expect(errors[0].handler_version).toBe(1);
 ```
 
@@ -723,7 +728,7 @@ export async function handleWebhook(request, sql, ctx) {
 }
 \`\`\`
 
-For unfamiliar integrations or resource types: use the probe loop (described in the system prompt) before drafting the real handler. Don't guess payload field names from training data. Likewise, don't guess signature schemes — check the upstream's webhook documentation for which header name, hashing algorithm, and encoding (hex vs base64, prefix, etc.) the upstream uses.`
+For unfamiliar integrations or resource types: use the probe loop (described in the system prompt) before drafting the real handler. Don't guess payload field names from training data. Likewise, don't guess signature schemes — check the upstream's webhook documentation for which header name, hashing algorithm, and encoding (hex vs base64, prefix, etc.) the upstream uses.`;
 ```
 
 **Also update the `handler_code` zod description** (a few lines below the main description):
@@ -922,7 +927,7 @@ Expected: 200 response, row inserted in the facet's `issues` table, `syncChangeT
 
 Verify by asking the agent:
 
-> "Use query_sync on linear-high-urgent-issues to SELECT * FROM issues ORDER BY created_at DESC LIMIT 3."
+> "Use query_sync on linear-high-urgent-issues to SELECT \* FROM issues ORDER BY created_at DESC LIMIT 3."
 
 Expected: the new issue appears at the top.
 
@@ -959,7 +964,7 @@ If any step fails, capture logs (wrangler tail, dev console) and diagnose. Commo
 
 - `handleWebhookDelivery`'s 4th parameter is `Record<string, string>` in both the method signature (Task 2) and every test call site (Task 2). No `string | null` leaks.
 - `__verifySignature` in the wrapper (Task 1) returns `boolean`; the supervisor treats any non-`true` as 401. The `result === true` check in the wrapper rejects anything weird a handler might return (truthy strings, etc.) — strictly boolean contract.
-- `FakeFacetStub` (Task 2 tests) matches the real RPC shape: fetch, __supervisorPing, __verifySignature.
+- `FakeFacetStub` (Task 2 tests) matches the real RPC shape: fetch, **supervisorPing, **verifySignature.
 - No type drift between the tool description's JSON-like JS example and the TS contract — the example is plain JS (runs in the facet runtime), which doesn't need TS types.
 
 **3. Backward compat:**
