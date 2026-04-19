@@ -1,19 +1,13 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Surface, Text } from "@cloudflare/kumo";
+import { Combobox } from "@cloudflare/kumo/components/combobox";
 import {
   createFrontendClient,
   type ConnectError,
   type ConnectResult
 } from "@pipedream/sdk/browser";
+import type { AppEntry } from "../pipedream/apps";
 import { useConnections, type ConnectionSummary } from "./useConnections";
-
-const APP_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "linear", label: "Linear" },
-  { value: "github", label: "GitHub" },
-  { value: "slack", label: "Slack" },
-  { value: "notion", label: "Notion" },
-  { value: "google_sheets", label: "Google Sheets" }
-];
 
 interface ConnectionsPanelProps {
   userId: string;
@@ -30,7 +24,33 @@ export function ConnectionsPanel({
   );
   const [pending, setPending] = useState<string | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
-  const [selectedApp, setSelectedApp] = useState<string>(APP_OPTIONS[0].value);
+  const [selectedApp, setSelectedApp] = useState<string>("");
+  const [apps, setApps] = useState<AppEntry[]>([]);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/pipedream/apps");
+        if (!res.ok) throw new Error(`${res.status}`);
+        const body = (await res.json()) as { apps: AppEntry[] };
+        if (!cancelled) {
+          setApps(body.apps);
+          setCatalogLoading(false);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setCatalogError(e instanceof Error ? e.message : String(e));
+          setCatalogLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleConnect = useCallback(async () => {
     setConnectError(null);
@@ -147,27 +167,46 @@ export function ConnectionsPanel({
         )}
       </ul>
       <div className="flex items-center gap-2">
-        <select
-          className="flex-1 text-xs bg-kumo-base border border-kumo-line rounded px-2 py-1 text-kumo-default"
-          value={selectedApp}
-          onChange={(e) => setSelectedApp(e.target.value)}
-          disabled={pending !== null}
-        >
-          {APP_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        <div className="flex-1">
+          <Combobox
+            items={apps}
+            value={selectedApp}
+            onValueChange={(v) => {
+              if (typeof v === "string") setSelectedApp(v);
+            }}
+            disabled={pending !== null || catalogLoading}
+          >
+            <Combobox.TriggerInput
+              placeholder={catalogLoading ? "Loading apps…" : "Search apps…"}
+            />
+            <Combobox.Content>
+              <Combobox.List>
+                {(app: AppEntry) => (
+                  <Combobox.Item value={app.name_slug}>
+                    {app.name}
+                  </Combobox.Item>
+                )}
+              </Combobox.List>
+              <Combobox.Empty>No apps match.</Combobox.Empty>
+            </Combobox.Content>
+          </Combobox>
+        </div>
         <Button
           variant="primary"
           size="sm"
           onClick={() => void handleConnect()}
-          disabled={pending !== null}
+          disabled={pending !== null || selectedApp === ""}
         >
           {pending === selectedApp ? "Connecting…" : "Connect"}
         </Button>
       </div>
+      {catalogError && (
+        <div className="mt-2">
+          <Text size="xs" variant="secondary">
+            Failed to load app catalog: {catalogError}
+          </Text>
+        </div>
+      )}
       {connectError && (
         <div className="mt-2">
           <Text size="xs" variant="secondary">
