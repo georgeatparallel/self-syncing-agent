@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { SELF } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
+
+declare module "cloudflare:test" {
+  interface ProvidedEnv extends Env {}
+}
 
 // Mock the pipedream barrel so we don't hit the network. ChatAgent imports
 // from "./pipedream" (the barrel), so intercepting the barrel is enough
@@ -12,12 +16,33 @@ vi.mock("../src/pipedream", () => ({
   })
 }));
 
-// The /api/user/:userId/* routes are wrapped with requireAuthAndUserIdMatch
-// (Phase F, Task 1). Every SELF.fetch below has to carry the Access header
-// matching the path :userId, or the request 401s/403s before hitting the
-// handler. Using the same UUID for both sides of the match satisfies the
-// middleware's case-insensitive equality check.
-const CF_ACCESS_HEADER = "cf-access-authenticated-user-email";
+// Phase F Task 1 fix-up: the /api/user/:userId/* routes now verify a
+// CF Access JWT. Minting a real JWT would mean managing a fake JWKS
+// endpoint; instead, mock `jose` so the middleware accepts the placeholder
+// header and returns a synthesized identity. The header value on the
+// request is just a sentinel so the middleware takes the JWT path.
+//
+// The mock is module-scoped so vitest-pool-workers' shared-isolate model
+// applies it to the Worker's own graph (per the cloudflare-test.d.ts note:
+// "global mocks will apply to it too"). Each test sets the sub it wants
+// via `authHeaders(userId)` — the mocked jwtVerify reads that hoisted
+// holder object, so per-test identity still works even though vi.mock
+// is hoisted above this file's top-level code.
+const authState = vi.hoisted(() => ({ sub: "" }));
+vi.mock("jose", () => ({
+  createRemoteJWKSet: vi.fn(() => "jwks-stub"),
+  jwtVerify: vi.fn(async () => ({
+    payload: { sub: authState.sub, email: `${authState.sub}@example.test` },
+    protectedHeader: {}
+  })),
+  errors: {}
+}));
+
+const CF_ACCESS_JWT_HEADER = "cf-access-jwt-assertion";
+function authHeaders(userId: string, extra: Record<string, string> = {}) {
+  authState.sub = userId;
+  return { [CF_ACCESS_JWT_HEADER]: "test.jwt.token", ...extra };
+}
 
 describe("Pipedream HTTP routes", () => {
   beforeEach(() => {
@@ -28,7 +53,7 @@ describe("Pipedream HTTP routes", () => {
     const userId = crypto.randomUUID();
     const res = await SELF.fetch(
       `https://test/api/user/${userId}/pipedream/token`,
-      { method: "POST", headers: { [CF_ACCESS_HEADER]: userId } }
+      { method: "POST", headers: authHeaders(userId) }
     );
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -45,10 +70,7 @@ describe("Pipedream HTTP routes", () => {
       `https://test/api/user/${userId}/pipedream/account`,
       {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          [CF_ACCESS_HEADER]: userId
-        },
+        headers: authHeaders(userId, { "content-type": "application/json" }),
         body: JSON.stringify({
           app_slug: "github",
           account_id: "apn_gh"
@@ -65,10 +87,7 @@ describe("Pipedream HTTP routes", () => {
       `https://test/api/user/${userId}/pipedream/account`,
       {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          [CF_ACCESS_HEADER]: userId
-        },
+        headers: authHeaders(userId, { "content-type": "application/json" }),
         body: JSON.stringify({ app_slug: "github" })
       }
     );
@@ -80,15 +99,12 @@ describe("Pipedream HTTP routes", () => {
     const userId = crypto.randomUUID();
     await SELF.fetch(`https://test/api/user/${userId}/pipedream/account`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        [CF_ACCESS_HEADER]: userId
-      },
+      headers: authHeaders(userId, { "content-type": "application/json" }),
       body: JSON.stringify({ app_slug: "slack", account_id: "apn_sl" })
     });
     const res = await SELF.fetch(
       `https://test/api/user/${userId}/pipedream/accounts`,
-      { headers: { [CF_ACCESS_HEADER]: userId } }
+      { headers: authHeaders(userId) }
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -102,17 +118,13 @@ describe("Pipedream HTTP routes", () => {
   });
 
   it("getConnectedAccountId returns account_id for a connected app, null otherwise", async () => {
-    const { env } = await import("cloudflare:test");
     const userId = crypto.randomUUID();
     // Seed via the existing POST route.
     const seed = await SELF.fetch(
       `https://test/api/user/${userId}/pipedream/account`,
       {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          [CF_ACCESS_HEADER]: userId
-        },
+        headers: authHeaders(userId, { "content-type": "application/json" }),
         body: JSON.stringify({ app_slug: "github", account_id: "apn_gh_1" })
       }
     );

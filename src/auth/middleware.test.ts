@@ -1,99 +1,177 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Hono } from "hono";
+
+// Mock jose BEFORE importing middleware so the module-level
+// createRemoteJWKSet call (captured into the JWKS cache on first use)
+// and the jwtVerify reference both point at our fakes. We don't care
+// about the real crypto; we're testing the middleware's plumbing.
+// `vi.hoisted` is required because `vi.mock` is hoisted above the
+// surrounding `const` declarations — a plain top-level const would be
+// in the TDZ when the factory runs.
+const { jwtVerifyMock } = vi.hoisted(() => ({ jwtVerifyMock: vi.fn() }));
+vi.mock("jose", () => ({
+  createRemoteJWKSet: vi.fn(() => "jwks-stub"),
+  jwtVerify: jwtVerifyMock,
+  errors: {}
+}));
+
 import {
-  CF_ACCESS_HEADER,
+  CF_ACCESS_JWT_HEADER,
   requireAuth,
   requireAuthAndUserIdMatch
 } from "./middleware";
+
+type TestBindings = {
+  CF_ACCESS_TEAM_DOMAIN: string;
+  CF_ACCESS_AUD: string;
+  DEV_FALLBACK_USER?: string;
+};
+
+const BASE_ENV: TestBindings = {
+  CF_ACCESS_TEAM_DOMAIN: "test.cloudflareaccess.com",
+  CF_ACCESS_AUD: "test-aud"
+};
 
 // Minimal Hono app builders so each test exercises one middleware in
 // isolation without spinning up the full Worker. We pass an env override
 // via `app.request(path, init, env)` — the third arg lands on `c.env`.
 function makeAuthedApp() {
   const app = new Hono<{
-    Bindings: { DEV_FALLBACK_USER?: string };
-    Variables: { userId: string };
+    Bindings: TestBindings;
+    Variables: { userId: string; email: string };
   }>();
-  app.get("/me", requireAuth, (c) => c.json({ userId: c.var.userId }));
+  app.get("/me", requireAuth, (c) =>
+    c.json({ userId: c.var.userId, email: c.var.email })
+  );
   return app;
 }
 
 function makeUserScopedApp() {
   const app = new Hono<{
-    Bindings: { DEV_FALLBACK_USER?: string };
-    Variables: { userId: string };
+    Bindings: TestBindings;
+    Variables: { userId: string; email: string };
   }>();
   app.get("/api/user/:userId/ping", requireAuthAndUserIdMatch, (c) =>
-    c.json({ ok: true, userId: c.var.userId })
+    c.json({ ok: true, userId: c.var.userId, email: c.var.email })
   );
   return app;
 }
 
 describe("requireAuth", () => {
-  it("returns 401 when no Access header and no dev fallback", async () => {
+  beforeEach(() => {
+    jwtVerifyMock.mockReset();
+  });
+
+  it("returns 401 when no JWT header and no DEV_FALLBACK_USER", async () => {
     const app = makeAuthedApp();
-    const res = await app.request("/me", {}, {});
+    const res = await app.request("/me", {}, { ...BASE_ENV });
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: "unauthenticated" });
   });
 
-  it("accepts the Access header and sets userId to the lowercased email", async () => {
+  it("accepts a valid JWT and sets userId=sub and lowercased email", async () => {
+    jwtVerifyMock.mockResolvedValueOnce({
+      payload: { sub: "user-uuid-1", email: "User@Example.COM" },
+      protectedHeader: {}
+    });
     const app = makeAuthedApp();
     const res = await app.request(
       "/me",
-      { headers: { [CF_ACCESS_HEADER]: "User@Example.COM" } },
-      {}
+      { headers: { [CF_ACCESS_JWT_HEADER]: "valid.jwt.token" } },
+      { ...BASE_ENV }
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ userId: "user@example.com" });
+    expect(await res.json()).toEqual({
+      userId: "user-uuid-1",
+      email: "user@example.com"
+    });
   });
 
-  it("falls back to DEV_FALLBACK_USER when the Access header is absent", async () => {
+  it("falls back to DEV_FALLBACK_USER when no JWT header is present", async () => {
     const app = makeAuthedApp();
     const res = await app.request(
       "/me",
       {},
-      { DEV_FALLBACK_USER: "Dev@Example.com" }
+      { ...BASE_ENV, DEV_FALLBACK_USER: "dev@local" }
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ userId: "dev@example.com" });
+    expect(await res.json()).toEqual({
+      userId: "dev@local",
+      email: "dev@local"
+    });
+    // Verify that no JWT verification was attempted.
+    expect(jwtVerifyMock).not.toHaveBeenCalled();
   });
 
-  it("prefers the real Access header over DEV_FALLBACK_USER when both are set", async () => {
+  it("prefers the JWT over DEV_FALLBACK_USER when both are present", async () => {
+    jwtVerifyMock.mockResolvedValueOnce({
+      payload: { sub: "real-sub", email: "real@example.com" },
+      protectedHeader: {}
+    });
     const app = makeAuthedApp();
     const res = await app.request(
       "/me",
-      { headers: { [CF_ACCESS_HEADER]: "real@example.com" } },
-      { DEV_FALLBACK_USER: "dev@example.com" }
+      { headers: { [CF_ACCESS_JWT_HEADER]: "valid.jwt.token" } },
+      { ...BASE_ENV, DEV_FALLBACK_USER: "dev@local" }
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ userId: "real@example.com" });
+    expect(await res.json()).toEqual({
+      userId: "real-sub",
+      email: "real@example.com"
+    });
+  });
+
+  it("returns 401 when JWT verification throws and no fallback is set", async () => {
+    jwtVerifyMock.mockRejectedValueOnce(
+      new Error("signature verification failed")
+    );
+    const app = makeAuthedApp();
+    const res = await app.request(
+      "/me",
+      { headers: { [CF_ACCESS_JWT_HEADER]: "bogus.jwt.token" } },
+      { ...BASE_ENV }
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "unauthenticated" });
   });
 });
 
 describe("requireAuthAndUserIdMatch", () => {
-  it("returns 403 when the path :userId does not match the authenticated email", async () => {
+  beforeEach(() => {
+    jwtVerifyMock.mockReset();
+  });
+
+  it("returns 403 when the path :userId does not match the JWT sub", async () => {
+    jwtVerifyMock.mockResolvedValueOnce({
+      payload: { sub: "me-uuid", email: "me@example.com" },
+      protectedHeader: {}
+    });
     const app = makeUserScopedApp();
     const res = await app.request(
-      "/api/user/other@example.com/ping",
-      { headers: { [CF_ACCESS_HEADER]: "me@example.com" } },
-      {}
+      "/api/user/other-uuid/ping",
+      { headers: { [CF_ACCESS_JWT_HEADER]: "valid.jwt.token" } },
+      { ...BASE_ENV }
     );
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: "user_id_mismatch" });
   });
 
-  it("returns 200 when the path :userId matches the authenticated email", async () => {
+  it("returns 200 when the path :userId matches the JWT sub", async () => {
+    jwtVerifyMock.mockResolvedValueOnce({
+      payload: { sub: "me-uuid", email: "Me@Example.COM" },
+      protectedHeader: {}
+    });
     const app = makeUserScopedApp();
     const res = await app.request(
-      "/api/user/me@example.com/ping",
-      { headers: { [CF_ACCESS_HEADER]: "Me@Example.com" } },
-      {}
+      "/api/user/me-uuid/ping",
+      { headers: { [CF_ACCESS_JWT_HEADER]: "valid.jwt.token" } },
+      { ...BASE_ENV }
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       ok: true,
-      userId: "me@example.com"
+      userId: "me-uuid",
+      email: "me@example.com"
     });
   });
 });

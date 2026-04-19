@@ -6,6 +6,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "routes": [{ "pattern": "sauna.ronit.one", "custom_domain": true }],
+  "vars": {
+    "CF_ACCESS_TEAM_DOMAIN": "rtpa25.cloudflareaccess.com",
+    "CF_ACCESS_AUD": "996001faaa4b65d6c225e53b8792601e91e508028c729791458bdaabab405de7"
+  },
   "assets": {
     "directory": "./public",
     "not_found_handling": "single-page-application",

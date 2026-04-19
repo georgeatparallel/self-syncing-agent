@@ -522,9 +522,13 @@ app.all("/webhook/:userId/:syncId", (c) =>
 );
 
 // "Who am I?" — the client bootstraps off this to know which Durable
-// Object namespace it belongs to. Intentionally does NOT include a
-// :userId path segment; the authenticated email IS the answer.
-app.get("/api/auth/me", requireAuth, (c) => c.json({ userId: c.var.userId }));
+// Object namespace it belongs to (via `userId`, the stable Access sub
+// UUID) and what to render in the UI (via `email`, the mutable display
+// name). Intentionally does NOT include a :userId path segment; the
+// authenticated identity IS the answer.
+app.get("/api/auth/me", requireAuth, (c) =>
+  c.json({ userId: c.var.userId, email: c.var.email })
+);
 
 app.get(
   "/api/user/:userId/syncs-summary",
