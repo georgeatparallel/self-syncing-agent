@@ -35,10 +35,12 @@ Key rules:
 
 Error shapes:
 - \`{ error: "not_found", sync_id }\` — unknown sync.
-- \`{ ok: false, error: "no_changes" }\` — none of the three optional fields were provided.
+- \`{ ok: false, error: "no_changes" }\` — none of the optional fields were provided.
 - \`{ ok: false, error: "migration_failed", detail }\` — migration_ddl threw. DB untouched, sync still on old version.
 - \`{ ok: false, error: "facet_load_failed", detail }\` — new bundle failed to compile. Rolled back automatically.
-- \`{ ok: true, new_version: N }\` — success.`,
+- \`{ ok: true, new_version: N }\` — success.
+
+**Egress (api_hosts) at update_sync:** \`api_hosts\` follows replace-or-preserve semantics — omit to keep the existing list, pass a new array to replace it, pass \`[]\` to explicitly clear (every subsequent fetch 403s until re-added). Mutating api_hosts triggers a fresh user approval — be intentional. Every handler fetch still needs the \`X-Pd-App: <slug>\` header; see create_sync's description for the canonical egress contract and a worked fetch example.`,
     inputSchema: z
       .object({
         sync_id: z.string().describe("The sync's UUID."),
@@ -62,16 +64,23 @@ Error shapes:
           .optional()
           .describe(
             "ALTER TABLE / ALTER INDEX / etc. that transitions the facet's existing SQLite from the old schema to the new one. Required when schema_ddl materially changes an existing table (ADD COLUMN, rename, type change). Not needed for adding entirely new tables (the new schema_ddl's CREATE TABLE IF NOT EXISTS covers that). Runs against the LIVE facet before the bundle swap."
+          ),
+        api_hosts: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            "Replace this sync's api_hosts list. Omit to preserve the existing list. Pass [] to explicitly clear (the handler will then 403 on any fetch). Declaring more hosts at update time triggers a fresh user approval — be intentional."
           )
       })
       .refine(
         (d) =>
           d.handler_code !== undefined ||
           d.schema_ddl !== undefined ||
-          d.migration_ddl !== undefined,
+          d.migration_ddl !== undefined ||
+          d.api_hosts !== undefined,
         {
           message:
-            "at least one of handler_code, schema_ddl, migration_ddl must be provided"
+            "at least one of handler_code, schema_ddl, migration_ddl, api_hosts must be provided"
         }
       ),
     needsApproval: true,
@@ -79,7 +88,8 @@ Error shapes:
       sync_id,
       handler_code,
       schema_ddl,
-      migration_ddl
+      migration_ddl,
+      api_hosts
     }): Promise<UpdateSyncResult> => {
       const sql = agent.sql.bind(agent);
       const oldSync = getSyncById(sql, sync_id);
@@ -91,7 +101,8 @@ Error shapes:
       if (
         handler_code === undefined &&
         schema_ddl === undefined &&
-        migration_ddl === undefined
+        migration_ddl === undefined &&
+        api_hosts === undefined
       ) {
         return { ok: false as const, error: "no_changes" as const };
       }
@@ -128,7 +139,11 @@ Error shapes:
         handler_code,
         schema_ddl,
         version: newVersion,
-        code_id: newCodeId
+        code_id: newCodeId,
+        // Pass api_hosts only when the agent actually provided a value.
+        // `undefined` omission keeps updateSync's preserve-semantics; an
+        // explicit `[]` reaches the repo as an empty-list reset.
+        ...(api_hosts !== undefined ? { api_hosts } : {})
       });
 
       // 3. Abort the old isolate. Facet storage persists across aborts —
@@ -152,7 +167,8 @@ Error shapes:
             handler_code: oldSync.handler_code,
             schema_ddl: oldSync.schema_ddl,
             version: oldSync.version,
-            code_id: oldSync.code_id
+            code_id: oldSync.code_id,
+            api_hosts: oldSync.api_hosts
           });
           return {
             ok: false as const,
@@ -198,7 +214,8 @@ Error shapes:
           handler_code: oldSync.handler_code,
           schema_ddl: oldSync.schema_ddl,
           version: oldSync.version,
-          code_id: oldSync.code_id
+          code_id: oldSync.code_id,
+          api_hosts: oldSync.api_hosts
         });
         try {
           agent.ctx.facets.abort(

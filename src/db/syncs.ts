@@ -66,6 +66,13 @@ export function updateSync(sql: SqlTag, id: string, patch: SyncPatch): Sync {
   const existing = getSyncById(sql, id);
   if (!existing) throw new Error(`updateSync: no sync with id=${id}`);
 
+  // api_hosts: `undefined` preserves, `[]` explicitly clears, `[hosts]`
+  // replaces. Mirror the JSON-encode pattern from createSync so decodeSync
+  // sees the same shape on read.
+  const nextApiHosts =
+    patch.api_hosts === undefined ? existing.api_hosts : patch.api_hosts;
+  const apiHostsEncoded = JSON.stringify(nextApiHosts);
+
   const next: Sync = {
     ...existing,
     handler_code: patch.handler_code ?? existing.handler_code,
@@ -80,6 +87,7 @@ export function updateSync(sql: SqlTag, id: string, patch: SyncPatch): Sync {
         : patch.upstream_webhook_id,
     code_id: patch.code_id ?? existing.code_id,
     version: patch.version ?? existing.version,
+    api_hosts: nextApiHosts,
     updated_at: Date.now()
   };
 
@@ -91,6 +99,7 @@ export function updateSync(sql: SqlTag, id: string, patch: SyncPatch): Sync {
       upstream_webhook_id = ${next.upstream_webhook_id},
       code_id = ${next.code_id},
       version = ${next.version},
+      api_hosts = ${apiHostsEncoded},
       updated_at = ${next.updated_at}
     WHERE id = ${id}
   `;

@@ -187,7 +187,34 @@ export async function handleWebhook(request, sql, ctx) {
   );
   return new Response("ok", { status: 200 });
 }
-\`\`\``,
+\`\`\`
+
+**Egress contract — YOU MUST declare api_hosts AND set X-Pd-App on every fetch from your handler.**
+
+1. **api_hosts declaration at create_sync.** The gateway default-denies any fetch() to a host not in this sync's api_hosts. Before drafting the handler, use fetch_docs on the upstream's API reference to enumerate all hosts your registerWebhook + handleWebhook code will hit (main API, webhook registration endpoint, CDN/uploads, webhook signature verification callbacks). Include all of them. The user sees the list at approval time.
+
+2. **Per-fetch X-Pd-App header.** Each outbound fetch from your handler MUST set the \`X-Pd-App\` header to one of the user's connected app slugs (see the \`<connected_accounts>\` context block — use the slugs verbatim). The gateway uses this header to pick which connected Pipedream account's OAuth token to inject via the proxy.
+
+3. **Cross-app is allowed.** A Linear sync handler may declare \`api_hosts: ["api.linear.app", "api.slack.com"]\` and fetch api.slack.com with \`X-Pd-App: slack\` — the user approves this at create_sync. The gateway will use the user's connected Slack account's token for that fetch.
+
+4. **Runtime errors are 403 with a specific error code**, surfaced in tool results:
+   - \`denied_host\` — host is on SSRF denylist (private IPs, metadata, etc.)
+   - \`missing_app_header\` — fetch has no X-Pd-App header
+   - \`unknown_host\` — host not in this sync's api_hosts
+   - \`account_not_connected\` — user hasn't connected an app with that slug
+   - \`sync_not_found\` — sync deleted or invalid (shouldn't happen during normal handler execution)
+
+5. **Example handler fetch shape:**
+   \`\`\`ts
+   await fetch("https://api.slack.com/chat.postMessage", {
+     method: "POST",
+     headers: {
+       "X-Pd-App": "slack",
+       "Content-Type": "application/json"
+     },
+     body: JSON.stringify({ channel: "C123", text: "new linear issue" })
+   });
+   \`\`\``,
     inputSchema: z.object({
       name: z
         .string()
@@ -221,6 +248,12 @@ export async function handleWebhook(request, sql, ctx) {
         .optional()
         .describe(
           "One-line human summary of what this sync tracks, e.g. 'only issues labeled bug in Core team'. Displayed in the UI and in ambient context."
+        ),
+      api_hosts: z
+        .array(z.string().min(1))
+        .optional()
+        .describe(
+          "Hostnames your handler code will fetch. The gateway default-denies any fetch() to a host NOT in this list for this sync. Required if your handler calls ANY upstream — including the integration you're syncing from. Use fetch_docs to discover exact hosts (often more than one: main API + webhook registration endpoint + uploads + CDN). Over-declaring is fine (user approves the list at create_sync); under-declaring produces 403 unknown_host at runtime, aborting the handler mid-execution."
         )
     }),
     needsApproval: true,
@@ -229,7 +262,8 @@ export async function handleWebhook(request, sql, ctx) {
       integration,
       schema_ddl,
       handler_code,
-      filter_description
+      filter_description,
+      api_hosts
     }): Promise<
       | { ok: true; sync_id: string; upstream_webhook_id: string }
       | { ok: false; error: string; detail: string }
@@ -277,7 +311,8 @@ export async function handleWebhook(request, sql, ctx) {
         filter_description: filter_description ?? null,
         webhook_secret: "",
         upstream_webhook_id: "",
-        code_id: codeId
+        code_id: codeId,
+        api_hosts: api_hosts ?? []
       };
 
       // 3. Attach + ping the facet to force Worker Loader compilation. If
@@ -351,7 +386,8 @@ export async function handleWebhook(request, sql, ctx) {
       const finalSync: NewSync = {
         ...preliminarySync,
         webhook_secret: registered.secret,
-        upstream_webhook_id: registered.id
+        upstream_webhook_id: registered.id,
+        api_hosts: api_hosts ?? []
       };
 
       try {

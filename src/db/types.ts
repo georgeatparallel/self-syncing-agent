@@ -79,6 +79,13 @@ export interface SyncPatch {
   upstream_webhook_id?: string | null;
   code_id?: string;
   version?: number;
+  /**
+   * Replace the sync's egress allowlist. `undefined` preserves the existing
+   * list; `[]` explicitly resets to empty (every fetch will then 403);
+   * `["host.com", ...]` replaces with the given list. Encoded as JSON TEXT
+   * at the repo boundary by `updateSync`.
+   */
+  api_hosts?: string[];
 }
 
 export interface SyncError {
