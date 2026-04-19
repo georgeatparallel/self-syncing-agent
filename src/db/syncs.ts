@@ -1,19 +1,42 @@
 import type { Sync, NewSync, SyncPatch, SqlTag } from "./types";
 
+/**
+ * SQLite returns `api_hosts` as the raw JSON-encoded TEXT we stored. Every
+ * caller wants `string[]`, so we decode once at the repo boundary. The row
+ * type on the SELECT matches `Sync` with `api_hosts` widened to string —
+ * kept local to avoid leaking the encoded shape into the public type.
+ */
+type SyncRow = Omit<Sync, "api_hosts"> & { api_hosts: string };
+
+function decodeSync(row: SyncRow): Sync {
+  let hosts: string[] = [];
+  try {
+    const parsed = JSON.parse(row.api_hosts);
+    if (Array.isArray(parsed))
+      hosts = parsed.filter((x) => typeof x === "string");
+  } catch {
+    // Corrupt JSON shouldn't brick the read; treat as empty allowlist so
+    // the gateway denies everything rather than faulting the whole DO.
+    hosts = [];
+  }
+  return { ...row, api_hosts: hosts };
+}
+
 export function createSync(sql: SqlTag, input: NewSync): Sync {
   const now = Date.now();
+  const apiHosts = JSON.stringify(input.api_hosts ?? []);
   sql`
     INSERT INTO syncs (
       id, name, integration, handler_code, schema_ddl,
       filter_description, webhook_secret, upstream_webhook_id,
-      code_id, version, created_at, updated_at
+      code_id, version, api_hosts, created_at, updated_at
     ) VALUES (
       ${input.id}, ${input.name}, ${input.integration},
       ${input.handler_code}, ${input.schema_ddl},
       ${input.filter_description ?? null},
       ${input.webhook_secret},
       ${input.upstream_webhook_id ?? null},
-      ${input.code_id}, 1, ${now}, ${now}
+      ${input.code_id}, 1, ${apiHosts}, ${now}, ${now}
     )
   `;
   const row = getSyncById(sql, input.id);
@@ -25,17 +48,18 @@ export function createSync(sql: SqlTag, input: NewSync): Sync {
 }
 
 export function getSyncById(sql: SqlTag, id: string): Sync | null {
-  const rows = sql<Sync>`SELECT * FROM syncs WHERE id = ${id}`;
-  return rows[0] ?? null;
+  const rows = sql<SyncRow>`SELECT * FROM syncs WHERE id = ${id}`;
+  return rows[0] ? decodeSync(rows[0]) : null;
 }
 
 export function getSyncByName(sql: SqlTag, name: string): Sync | null {
-  const rows = sql<Sync>`SELECT * FROM syncs WHERE name = ${name}`;
-  return rows[0] ?? null;
+  const rows = sql<SyncRow>`SELECT * FROM syncs WHERE name = ${name}`;
+  return rows[0] ? decodeSync(rows[0]) : null;
 }
 
 export function listSyncs(sql: SqlTag): Sync[] {
-  return sql<Sync>`SELECT * FROM syncs ORDER BY created_at ASC`;
+  const rows = sql<SyncRow>`SELECT * FROM syncs ORDER BY created_at ASC`;
+  return rows.map(decodeSync);
 }
 
 export function updateSync(sql: SqlTag, id: string, patch: SyncPatch): Sync {

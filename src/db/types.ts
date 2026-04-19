@@ -49,6 +49,13 @@ export interface Sync {
   version: number;
   created_at: number;
   updated_at: number;
+  /**
+   * Agent-declared egress allowlist. Phase F: every outbound request from
+   * this sync's facet must resolve to a host on this list (after the SSRF
+   * denylist check). Stored as a JSON-encoded TEXT column; repo helpers
+   * encode on write and decode on read.
+   */
+  api_hosts: string[];
 }
 
 export interface NewSync {
@@ -61,6 +68,8 @@ export interface NewSync {
   webhook_secret: string;
   upstream_webhook_id?: string | null;
   code_id: string;
+  /** Defaults to `[]` when omitted. */
+  api_hosts?: string[];
 }
 
 export interface SyncPatch {

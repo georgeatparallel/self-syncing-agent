@@ -16,6 +16,7 @@ function sampleSync(overrides: Partial<Sync> = {}): Sync {
     version: 1,
     created_at: 1_000_000,
     updated_at: 1_000_000,
+    api_hosts: [],
     ...overrides
   };
 }
