@@ -14,27 +14,56 @@ export function createSyncTool(agent: ChatAgent) {
   return tool({
     description: `Create a new sync. Registers a webhook with the upstream service, loads the agent-authored handler into an isolated facet runtime with its own SQLite, applies the schema DDL, and persists the sync registry row. Approval-gated — the user sees the drafted schema_ddl and handler_code in the approval dialog before anything runs. Call this AFTER you've shown the draft in chat.
 
-handler_code contract: JavaScript module source that MUST export \`async function handleWebhook(request, sql, ctx)\`.
-- \`request\` is the raw webhook POST; signature is already verified by the supervisor, so your code never touches auth.
-- \`sql\` is the facet's own SQLite. \`sql.exec(query, ...bindings)\` for inserts/updates; \`sql.exec(query, ...bindings).toArray()\` for reads.
-- \`ctx\` carries two capabilities:
-  - \`ctx.waitUntil(promise)\` — keep background work alive past the 200 response. Use this so the webhook returns a fast 200 while enrichment runs afterwards.
-  - \`ctx.agent({ model?, system, messages, maxSteps? })\` — spawn a sub-agent ReAct loop and get back a string. \`model\` is \`"haiku" | "sonnet" | "opus"\` (default \`"sonnet"\`; pick \`haiku\` for simple classification, \`opus\` for hard reasoning). The sub-agent has three built-in tools: \`sql\` (reads + writes the facet's SQLite), \`fetch\` (upstream HTTP through the same credential-injecting proxy as the handler's own fetch), and \`exec\` (runs an agent-authored JS module in a fresh isolate — contract matches the run_in_sync tool: export \`async function runInSync(facet, fetch)\`). No nested \`ctx.agent()\` calls permitted. Use when the handler needs LLM reasoning on the payload — triage, classification, summarization, enrichment — rather than deterministic processing.
-- Return a 2xx Response for successful processing (including "filtered out, nothing to write" — use 200). Return 5xx only if you want the upstream to retry.
-- Be idempotent. Upstreams may deliver the same event twice — use INSERT OR REPLACE or ON CONFLICT keyed on the resource's stable id from the payload.
-- Do not import anything beyond the parameters. \`fetch\` is globally available for upstream API calls (the proxy injects auth automatically); most write-path handlers don't need it.
-- Keep it fast. Upstream webhook timeouts are typically 5–30 seconds. If you need longer LLM reasoning, run it inside \`ctx.waitUntil(ctx.agent(...))\` so the 200 returns immediately and the sub-agent enriches the row in the background.
+handler_code contract: JavaScript module source that MUST export TWO async functions:
 
-Example fire-and-forget triage pattern:
+1) \`async function verifySignature(body, headers, secret): Promise<boolean>\`
+   — Called by the supervisor BEFORE handleWebhook on every delivery.
+   - \`body\` is a Uint8Array of the raw request body.
+   - \`headers\` is a Record<string, string> with lowercased keys.
+   - \`secret\` is the webhook_secret the upstream registration returned (stored for you, passed in at call time — never hardcode it).
+   - Return true to accept the delivery, false (or throw) to reject it — the supervisor returns 401 on false / thrown.
+   - REQUIRED. A missing export fails closed (supervisor returns 401 for every delivery), so every handler must own its signature verification. Each upstream signs differently: Linear uses HMAC-SHA256-hex in \`linear-signature\`; GitHub uses \`x-hub-signature-256: sha256=<hex>\`; Slack uses \`v0:<timestamp>:<body>\` signed with HMAC and shipped in \`x-slack-signature\` as \`v0=<hex>\`. Check the upstream's docs if unsure.
+
+2) \`async function handleWebhook(request, sql, ctx): Promise<Response>\`
+   — Called AFTER the signature has been verified.
+   - \`request\` is the raw webhook POST.
+   - \`sql\` is the facet's own SQLite. \`sql.exec(query, ...bindings)\` for inserts/updates; \`sql.exec(query, ...bindings).toArray()\` for reads.
+   - \`ctx\` carries two capabilities:
+     - \`ctx.waitUntil(promise)\` — keep background work alive past the 200 response. Use this so the webhook returns a fast 200 while enrichment runs afterwards.
+     - \`ctx.agent({ model?, system, messages, maxSteps? })\` — spawn a sub-agent ReAct loop and get back a string. \`model\` is \`"haiku" | "sonnet" | "opus"\` (default \`"sonnet"\`). The sub-agent has three built-in tools: \`sql\` (reads + writes the facet's SQLite), \`fetch\` (upstream HTTP through the same credential-injecting proxy as the handler's own fetch), and \`exec\` (runs an agent-authored JS module in a fresh isolate). No nested \`ctx.agent()\` calls permitted.
+   - Return a 2xx Response for successful processing (including "filtered out, nothing to write" — use 200). Return 5xx only if you want the upstream to retry.
+   - Be idempotent. Upstreams may deliver the same event twice — use INSERT OR REPLACE or ON CONFLICT keyed on the resource's stable id from the payload.
+   - Do not import anything beyond the parameters. \`fetch\` is globally available for upstream API calls (the proxy injects auth automatically); most write-path handlers don't need it.
+   - Keep it fast. Upstream webhook timeouts are typically 5–30 seconds. If you need longer LLM reasoning, run it inside \`ctx.waitUntil(ctx.agent(...))\` so the 200 returns immediately and the sub-agent enriches the row in the background.
+
+Example handler for Linear (HMAC-SHA256-hex signature scheme):
 \`\`\`js
+export async function verifySignature(body, headers, secret) {
+  const sig = headers["linear-signature"];
+  if (!sig) return false;
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const computed = await crypto.subtle.sign("HMAC", key, body);
+  const hex = [...new Uint8Array(computed)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return hex === sig;
+}
+
 export async function handleWebhook(request, sql, ctx) {
   const payload = await request.json();
   const id = payload.data.id;
   sql.exec(
-    "INSERT OR REPLACE INTO issues (id, title, priority) VALUES (?, ?, ?)",
+    "INSERT OR REPLACE INTO issues (id, title, priority, created_at) VALUES (?, ?, ?, ?)",
     id,
     payload.data.title,
-    payload.data.priority
+    payload.data.priority,
+    Date.now()
   );
   if (payload.data.priority === 1) {
     ctx.waitUntil(
@@ -51,7 +80,7 @@ export async function handleWebhook(request, sql, ctx) {
 }
 \`\`\`
 
-For unfamiliar integrations or resource types: use the probe loop (described in the system prompt) before drafting the real handler. Don't guess payload field names from training data.`,
+For unfamiliar integrations or resource types: use the probe loop (described in the system prompt) before drafting the real handler. Don't guess payload field names from training data. Likewise, don't guess signature schemes — check the upstream's webhook documentation for which header name, hashing algorithm, and encoding (hex vs base64, prefix, etc.) the upstream uses.`,
     inputSchema: z.object({
       name: z
         .string()
@@ -76,12 +105,12 @@ For unfamiliar integrations or resource types: use the probe loop (described in 
       schema_ddl: z
         .string()
         .describe(
-          "One or more CREATE TABLE / CREATE INDEX statements separated by semicolons. Use CREATE TABLE IF NOT EXISTS so re-applying is safe. SQLite types only: TEXT, INTEGER, REAL, BLOB, NULL. Store JSON-shaped fields (arrays, nested metadata) as TEXT and parse at read time."
+          "One or more CREATE TABLE / CREATE INDEX statements separated by semicolons. Use CREATE TABLE IF NOT EXISTS so re-applying is safe. SQLite types only: TEXT, INTEGER, REAL, BLOB, NULL. Store JSON-shaped fields (arrays, nested metadata) as TEXT and parse at read time. REQUIRED: include a `created_at INTEGER NOT NULL` column on every table holding webhook-ingested rows, populated with `Date.now()` at INSERT time. This is a debuggability requirement — the 401-triage rubric (see the system prompt) cross-references ingestion timestamps against sync_errors.occurred_at to distinguish 'verifier broken' from 'scanner noise'. Without it, the agent cannot self-diagnose why a sync has gone silent."
         ),
       handler_code: z
         .string()
         .describe(
-          "JavaScript module source that exports `async function handleWebhook(request, sql, ctx)`. See the tool description for the full contract including the `ctx.agent` sub-agent primitive."
+          "JavaScript module source that exports `async function verifySignature(body, headers, secret)` AND `async function handleWebhook(request, sql, ctx)`. Both exports are required. See the tool description for the full contract and a Linear example."
         ),
       filter_description: z
         .string()

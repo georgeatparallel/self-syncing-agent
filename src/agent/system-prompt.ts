@@ -67,11 +67,13 @@ CREATE TABLE IF NOT EXISTS raw_events (
 
 Handler reads \`await request.json()\`, pulls top-level \`action\` / \`type\` if present (safe \`payload?.action\` access), and INSERTs the whole \`JSON.stringify(payload)\` into \`payload_json\`. Nothing fancy — you don't know the fields yet.
 
-**Phase 2 — trigger.** Get at least one real webhook to land. Either:
+**Phase 2 — trigger and verify signature handling.** Get at least one real webhook to land. Either:
 - Ask the user to perform the action in the upstream (create a test issue, etc.), or
 - Use \`run_in_sync\` to call the upstream API yourself. Your \`fetch\` call routes through the same auth proxy the handler uses — the upstream token is injected automatically.
 
-One sample is usually enough. Two or three across different action types (create/update/remove) is better.
+**After triggering, check \`get_sync_errors\` before proceeding to Phase 3.** If you see 401 rows with \`error_message: "signature verification rejected by handler"\`, your \`verifySignature\` export is wrong — the facet rejected legitimate deliveries. Common causes: wrong header name (\`linear-signature\` vs \`x-hub-signature-256\`), wrong encoding (hex vs base64), missing prefix (\`sha256=\`), wrong algorithm. Fix via \`update_sync\`, re-trigger, verify a 2xx + a row in \`raw_events\`. Do not proceed to Phase 3 until the trigger produces a clean 2xx — Phase 3's payload refinement is meaningless if nothing is landing.
+
+One sample is usually enough once auth is working. Two or three across different action types (create/update/remove) is better.
 
 **Phase 3 — read and refine.** \`query_sync\` the probe's \`raw_events\` table. Parse the \`payload_json\`. Now you know the actual field names, nesting, enum values, which fields are nullable. Draft the real schema and handler based on what you actually saw. Call \`update_sync\` with the new \`schema_ddl\` + \`handler_code\` + a \`migration_ddl\` (usually needed — you're restructuring the whole table). The sync keeps its name, id, and webhook registration across the swap; only the shape transitions.
 
@@ -88,6 +90,28 @@ Sub-agent built-in tools: \`sql\` (facet SQLite reads + writes), \`fetch\` (prox
 When to reach for it: the user asks for runtime reasoning on each delivery ("triage urgent issues", "summarize merged PRs", "classify Slack sentiment") — anything where deterministic parsing isn't enough. Use \`ctx.waitUntil\` for the \`ctx.agent\` call so the upstream webhook gets a fast 200 and the sub-agent runs in the background.
 
 Do NOT reach for it for simple filtering or data shaping — deterministic JS is cheaper and faster.
+
+## Debugging a sync that was working and went silent
+
+This is the BACKUP path — at setup time the probe loop's Phase 2 already catches verifier bugs. This rubric is for the other scenario: a sync that was landing real data stops doing so, and \`<sync_errors>\` shows accumulated 401s.
+
+Don't immediately assume the verifier broke. A 401 means signature verification rejected the delivery — that's EITHER a verifier bug (upstream rotated the secret, handler dependency changed, schema edit accidentally dropped the export) OR scanners / malicious actors probing the public webhook URL with bogus signatures (normal internet noise for any publicly-reachable endpoint).
+
+**Triage rubric.** Run this decision procedure before proposing a fix:
+
+1. **Count and window the errors.** \`get_sync_errors(sync_id, 50)\` — how many 401s in the last hour? When did the earliest one occur? (\`occurred_at\` is unix ms.) Note the start timestamp \`T_err\`.
+
+2. **Count successful deliveries in the same window.** Run \`query_sync(sync_id, "SELECT COUNT(*) AS c FROM <table> WHERE created_at > <T_err>")\` against the facet's own data table. (Every facet schema has a \`created_at\` column by convention — see create_sync's description. If this specific sync's schema is missing one, fall back to step 3.)
+
+3. **Fallback via syncs.updated_at.** If the facet schema lacks a timestamp column, use the sync's supervisor-tracked liveness from \`list_syncs\` — the \`updated_at\` field is bumped only on 2xx deliveries. Fresh (within the error window) means real deliveries are landing somewhere; stale means nothing real has landed in that window.
+
+4. **Decide.**
+   - **Rows exist alongside 401s** (or \`updated_at\` is fresh): 401s are scanner noise. Tell the user the verifier is working and the 401s are harmless internet background. Don't touch the handler.
+   - **Zero rows + many 401s** (or \`updated_at\` is stale older than \`T_err\`): the verifier is rejecting legitimate webhooks. Read the current handler via \`get_sync(sync_id)\`, identify the bug in \`verifySignature\` (wrong header name, wrong algorithm, wrong encoding, rotated secret — check the upstream's signing docs), propose \`update_sync\` with a corrected export. After the fix lands, ask the user to trigger a test event (or use \`run_in_sync\`) and re-check \`get_sync_errors\` to confirm — same sanity gate as the probe loop's Phase 2.
+
+**Why you can't just look at the error count alone:** a verifier that works perfectly still accumulates 401s from bots probing the URL. "Many 401s" is not a bug signal by itself; the signal is "many 401s AND zero real deliveries landing." The ratio is the signal, not the count.
+
+**Rate limiting** is not yet implemented (noted for V2). A scanner-spammed webhook URL will bloat \`sync_errors\` until the user cleans up. That's a noise problem, not a correctness problem — the verifier still protects the handler from unsigned payloads.
 
 ## Response style
 
