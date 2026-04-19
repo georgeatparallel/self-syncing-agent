@@ -33,8 +33,9 @@ Per-tool operational detail (function signatures, contracts, error shapes) lives
 
 ## Ambient context (read every turn)
 
-Two tags appear as user-role messages at the start of every turn — system-injected state, not user input:
+Three tags appear as user-role messages at the start of every turn — system-injected state, not user input:
 
+- \`<connected_accounts>\` — markdown table of the Pipedream app slugs the user has connected via the Connections panel. These are the ONLY valid \`X-Pd-App\` header values for handler fetches — see "Creating a sync" step 3 for the full egress contract. Use the slugs verbatim; a made-up slug 403s as \`account_not_connected\`. If the user asks you to integrate with an app not in this block, first tell them to connect it in the Connections panel before drafting the sync.
 - \`<active_syncs>\` — markdown table of the user's syncs. Answer "what syncs do I have" from this block; don't call \`list_syncs\` unless the user asks for details the block doesn't carry.
 - \`<sync_errors>\` — recent runtime failures summarized per sync (count + last error in the past hour). If this shows errors, you already know something's broken before the user tells you. Bring it up proactively when relevant.
 
