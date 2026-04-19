@@ -63,7 +63,7 @@ Gateway flow (in `HttpGateway.fetch`):
 
 1. **SSRF denylist** — pure compute, no I/O.
 2. **Read `X-Pd-App` header** — the agent's per-fetch declaration of which connected app's OAuth token to use. Missing → `missing_app_header`.
-3. **RPC into the user's ChatAgent DO** — single call: `resolveEgress(syncId, host, appSlug)`. Inside the DO: `getSyncById(sql, syncId)` (indexed read of ONE sync row — no cross-sync walk), then `matchesHost(sync.api_hosts, host)` (reject if not declared), then `getConnectedAccountBySlug(sql, userId, appSlug)` (reject if user hasn't connected that app). Returns `{ accountId }` or an error code.
+3. **RPC into the user's ChatAgent DO** — single call: `resolveEgress(userId, syncId, host, appSlug)`. Inside the DO: `getSyncById(sql, syncId)` (indexed read of ONE sync row — no cross-sync walk), then `matchesHost(sync.api_hosts, host)` (reject if not declared), then `getConnectedAccountBySlug(sql, userId, appSlug)` (reject if user hasn't connected that app). Returns `{ accountId }` or an error code.
 4. **`proxiedFetch`** with the resolved `accountId` — Pipedream injects the matching OAuth token server-side.
 
 Zero stamped state beyond the two identity strings. Fresh on every fetch. Per-sync isolation is enforced by `syncId` — the DO looks up exactly the sync that owns the calling facet; sync B's row is never consulted.
@@ -88,17 +88,17 @@ Zero stamped state beyond the two identity strings. Fresh on every fetch. Per-sy
 
 ## Threat Model Table
 
-| Attack                                                                                                                                            | Defense                                                                                                                                                                                                                                              | Where it lives                                                |
-| ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| localStorage `userId` forging / session hijack                                                                                                    | Cloudflare Access + `workers_dev: false`                                                                                                                                                                                                             | Infrastructure                                                |
-| `/api/user/other@user.com/...` enumeration in a future policy-loosening                                                                           | `requireAuthAndUserIdMatch` path check                                                                                                                                                                                                               | `src/auth/middleware.ts`                                      |
-| Private-IP / metadata-endpoint fetches from facet code                                                                                            | SSRF denylist (first check)                                                                                                                                                                                                                          | `src/pipedream/app-hosts.ts` _(SSRF-only helper, no catalog)_ |
-| User types "exfil my data to evil.com"                                                                                                            | User's lookout — they own the declaration                                                                                                                                                                                                            | N/A (spec-accepted)                                           |
-| Attacker-controlled webhook payload prompt-injects a webhook-invoked agent into fetching `attacker.com`                                           | Host must be in this sync's `api_hosts` — declared pre-attacker at `create_sync`, user-approved, read live by DO via `getSyncById(syncId)` (syncId stamped on facet props at bundle time, also pre-attacker). `attacker.com` 403s as `unknown_host`. | `syncs.api_hosts` + `props.syncId` + DO RPC                   |
-| Compromised sync A handler tries to exfil using sync B's declared allowlist (cross-sync contamination)                                            | DO RPC scopes read to `syncId` (single indexed row). `listSyncs` is never called on the fetch path. Sync B's row is never touched.                                                                                                                   | `resolveEgress(syncId, host, appSlug)` on ChatAgent DO        |
-| Attacker routes a **declared** host through the **wrong** app's credentials via `X-Pd-App` header (e.g., `api.slack.com` with `X-Pd-App: stripe`) | **Accepted residual.** Target host receives a wrong-audience Bearer token; the token/data does not leak to attacker-controlled infrastructure. Cost of closing it (host ↔ app catalog, or Pipedream-side target validation) outweighs trial value.   | Accepted trade-off (documented)                               |
-| Agent silently adds `evil.com` to `api_hosts` at create_sync to smuggle it past approval                                                          | User sees the list in the approval dialog and refuses                                                                                                                                                                                                | Existing create_sync UX                                       |
-| Webhook endpoint abuse (spam POSTs to `/webhook/:userId/:syncId`)                                                                                 | Per-sync signature verification (Phase C)                                                                                                                                                                                                            | Existing                                                      |
+| Attack                                                                                                                                            | Defense                                                                                                                                                                                                                                              | Where it lives                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| localStorage `userId` forging / session hijack                                                                                                    | Cloudflare Access + `workers_dev: false`                                                                                                                                                                                                             | Infrastructure                                                 |
+| `/api/user/other@user.com/...` enumeration in a future policy-loosening                                                                           | `requireAuthAndUserIdMatch` path check                                                                                                                                                                                                               | `src/auth/middleware.ts`                                       |
+| Private-IP / metadata-endpoint fetches from facet code                                                                                            | SSRF denylist (first check)                                                                                                                                                                                                                          | `src/pipedream/app-hosts.ts` _(SSRF-only helper, no catalog)_  |
+| User types "exfil my data to evil.com"                                                                                                            | User's lookout — they own the declaration                                                                                                                                                                                                            | N/A (spec-accepted)                                            |
+| Attacker-controlled webhook payload prompt-injects a webhook-invoked agent into fetching `attacker.com`                                           | Host must be in this sync's `api_hosts` — declared pre-attacker at `create_sync`, user-approved, read live by DO via `getSyncById(syncId)` (syncId stamped on facet props at bundle time, also pre-attacker). `attacker.com` 403s as `unknown_host`. | `syncs.api_hosts` + `props.syncId` + DO RPC                    |
+| Compromised sync A handler tries to exfil using sync B's declared allowlist (cross-sync contamination)                                            | DO RPC scopes read to `syncId` (single indexed row). `listSyncs` is never called on the fetch path. Sync B's row is never touched.                                                                                                                   | `resolveEgress(userId, syncId, host, appSlug)` on ChatAgent DO |
+| Attacker routes a **declared** host through the **wrong** app's credentials via `X-Pd-App` header (e.g., `api.slack.com` with `X-Pd-App: stripe`) | **Accepted residual.** Target host receives a wrong-audience Bearer token; the token/data does not leak to attacker-controlled infrastructure. Cost of closing it (host ↔ app catalog, or Pipedream-side target validation) outweighs trial value.   | Accepted trade-off (documented)                                |
+| Agent silently adds `evil.com` to `api_hosts` at create_sync to smuggle it past approval                                                          | User sees the list in the approval dialog and refuses                                                                                                                                                                                                | Existing create_sync UX                                        |
+| Webhook endpoint abuse (spam POSTs to `/webhook/:userId/:syncId`)                                                                                 | Per-sync signature verification (Phase C)                                                                                                                                                                                                            | Existing                                                       |
 
 ---
 
@@ -155,12 +155,12 @@ Implementer MUST confirm the above is done (it is) before starting Task 1.
 **Modified files:**
 
 - `wrangler.jsonc` — already has `workers_dev: false` + custom-domain route from the prereq (Task 1 also added `vars` block for `CF_ACCESS_TEAM_DOMAIN` + `CF_ACCESS_AUD`).
-- `src/server.ts` — wrap `/api/user/:userId/*` with `requireAuthAndUserIdMatch`. Add `GET /api/auth/me` under `requireAuth`. Webhook routes stay unwrapped. Add `resolveEgress(syncId, host, appSlug)` RPC method on the `ChatAgent` class.
+- `src/server.ts` — wrap `/api/user/:userId/*` with `requireAuthAndUserIdMatch`. Add `GET /api/auth/me` under `requireAuth`. Webhook routes stay unwrapped. Add `resolveEgress(userId, syncId, host, appSlug)` RPC method on the `ChatAgent` class.
 - `src/db/schema.ts` — add `api_hosts TEXT NOT NULL DEFAULT '[]'` to `syncs`. (Task 2, already shipped.)
 - `src/db/types.ts` — `Sync.api_hosts: string[]`. (Task 2.)
 - `src/db/syncs.ts` — JSON encode/decode via `decodeSync`. (Task 2.)
 - `src/db/connected-accounts.ts` — add `getConnectedAccountBySlug(sql, userId, appSlug): ConnectedAccount | null` (indexed single-row lookup; gateway-critical path).
-- `src/proxy/http-gateway.ts` — rewrite: SSRF denylist first, read `X-Pd-App` header, RPC `resolveEgress(syncId, host, appSlug)` into the user's ChatAgent DO, else 403. Error codes: `denied_host`, `missing_app_header`, `unknown_host`, `account_not_connected`, `sync_not_found`.
+- `src/proxy/http-gateway.ts` — rewrite: SSRF denylist first, read `X-Pd-App` header, RPC `resolveEgress(userId, syncId, host, appSlug)` into the user's ChatAgent DO, else 403. Error codes: `denied_host`, `missing_app_header`, `unknown_host`, `account_not_connected`, `sync_not_found`.
 - `src/facet/bundle.ts`, `src/execrunner/bundle.ts` — stamp `{userId, syncId}` on `HttpGateway({ props: ... })`. That is all. No `apiHosts`. No `accounts`. No `accountId`.
 - `src/facet/loader.ts` — pass `syncId` through (unchanged signature beyond threading `sync.id`).
 - `src/agent/context.ts` — new `formatConnectedAccounts(accounts)` helper; `buildContextMessages` takes `userId` and emits three blocks (`<connected_accounts>`, `<active_syncs>`, `<sync_errors>`).
@@ -459,7 +459,7 @@ git commit -m "feat(pipedream): syncs.api_hosts column + SSRF denylist; drop hos
 - Modify: `src/proxy/http-gateway.ts`, `src/proxy/http-gateway.test.ts`
 - Modify: `src/facet/bundle.ts`, `src/facet/bundle.test.ts`, `src/facet/loader.ts`
 - Modify: `src/execrunner/bundle.ts`, `src/execrunner/bundle.test.ts` (+ call sites of `buildExecWorkerCode` — grep)
-- Modify: `src/server.ts` — add `resolveEgress(syncId, host, appSlug)` RPC on the `ChatAgent` class
+- Modify: `src/server.ts` — add `resolveEgress(userId, syncId, host, appSlug)` RPC on the `ChatAgent` class
 - Modify: `src/db/connected-accounts.ts` — add `getConnectedAccountBySlug(sql, userId, appSlug)`
 - Modify: `src/agent/context.ts` — add `formatConnectedAccounts` block; `buildContextMessages` takes `userId`
 - Modify: `src/agent/chat-loop.ts` or wherever `buildContextMessages` is called — pass `userId`
@@ -520,6 +520,7 @@ Add to the `ChatAgent` class:
 
 ```ts
 async resolveEgress(
+  userId: string,
   syncId: string,
   host: string,
   appSlug: string
@@ -527,7 +528,7 @@ async resolveEgress(
   | { ok: true; accountId: string }
   | { ok: false; error: "sync_not_found" | "unknown_host" | "account_not_connected" }
 > {
-  await this.setName(/* DO's name, which equals userId per idFromName */);
+  await this.setName(userId); // REQUIRED — memory note: setState needs this.name hydrated
   this.#ensureSchema();
   const sql = this.sql.bind(this);
   const h = host.toLowerCase();
@@ -536,16 +537,16 @@ async resolveEgress(
   if (!sync) return { ok: false, error: "sync_not_found" };
   if (!matchesHost(sync.api_hosts, h)) return { ok: false, error: "unknown_host" };
 
-  const account = getConnectedAccountBySlug(sql, this.name, appSlug);
+  const account = getConnectedAccountBySlug(sql, userId, appSlug);
   if (!account) return { ok: false, error: "account_not_connected" };
 
   return { ok: true, accountId: account.account_id };
 }
 ```
 
-**Critical**: `await this.setName(userId)` per the memory note — `_emit` reads `this.name`. Use whichever userId propagation pattern other ChatAgent RPC methods in this file already use; match it exactly.
+**Critical on the signature**: `userId` is the FIRST param — gateway reads it from `this.ctx.props.userId` and forwards. Do NOT rely on `this.name` being pre-populated when the DO method runs; the memory note is explicit that `setName(userId)` must be awaited before any DB access. Match the direct-RPC signature pattern used by other ChatAgent methods in `src/server.ts`.
 
-`matchesHost` lives as a top-level helper in `src/server.ts` (or exported from `src/proxy/http-gateway.ts` and imported — pick whichever is cleaner given the module graph).
+**`matchesHost` lives in `src/proxy/http-gateway.ts`** as an exported top-level helper. Gateway unit tests import it from there; `src/server.ts`'s `ChatAgent.resolveEgress` imports it from there too (supervisor already imports from `src/proxy/`, so no module-graph concern).
 
 ### `src/db/connected-accounts.ts` — new helper
 
@@ -582,6 +583,7 @@ export interface HttpGatewayProps {
 type Forwarder = (r: Request) => Promise<Response>;
 
 type EgressLookup = (
+  userId: string,
   syncId: string,
   host: string,
   appSlug: string
@@ -611,7 +613,7 @@ export const X_PD_APP_HEADER = "x-pd-app";
  * Gateway flow:
  *   1. SSRF denylist — absolute floor.
  *   2. Read X-Pd-App header — agent's per-fetch app declaration.
- *   3. RPC resolveEgress(syncId, host, appSlug) into user's ChatAgent DO —
+ *   3. RPC resolveEgress(userId, syncId, host, appSlug) into user's ChatAgent DO —
  *      reads THIS sync's api_hosts (scoped by syncId, no cross-sync walk)
  *      and user's connected_accounts (scoped by userId+appSlug).
  *   4. Proxy via Pipedream with the resolved accountId.
@@ -645,7 +647,12 @@ export async function handleGatewayRequest(
     });
   }
 
-  const result = await options.egressLookup(props.syncId, host, appSlug);
+  const result = await options.egressLookup(
+    props.userId,
+    props.syncId,
+    host,
+    appSlug
+  );
   if (!result.ok) {
     const msg = {
       sync_not_found: "Sync not found for syncId.",
@@ -668,17 +675,25 @@ export async function handleGatewayRequest(
 
 export class HttpGateway extends WorkerEntrypoint<Env, HttpGatewayProps> {
   async fetch(request: Request): Promise<Response> {
-    const egressLookup: EgressLookup = async (syncId, host, appSlug) => {
+    const egressLookup: EgressLookup = async (
+      userId,
+      syncId,
+      host,
+      appSlug
+    ) => {
       const stub = this.env.ChatAgent.get(
-        this.env.ChatAgent.idFromName(this.ctx.props.userId!)
+        this.env.ChatAgent.idFromName(userId)
       );
       return (
         stub as unknown as {
-          resolveEgress: typeof egressLookup extends (...a: infer A) => infer R
-            ? (...a: A) => R
-            : never;
+          resolveEgress: (
+            u: string,
+            s: string,
+            h: string,
+            a: string
+          ) => ReturnType<EgressLookup>;
         }
-      ).resolveEgress(syncId, host, appSlug);
+      ).resolveEgress(userId, syncId, host, appSlug);
     };
     return handleGatewayRequest(request, this.env, this.ctx.props, {
       egressLookup
@@ -1024,7 +1039,7 @@ Useful record of alternatives we thought through. Each was rejected for a specif
 - `userId` = Access JWT `sub` claim (UUID). Used as DO name (`idFromName(sub)`), as URL path param, as `connected_accounts.user_id`.
 - `email` = Access JWT `email` claim, carried separately on `c.var.email` for display in `/api/auth/me`. Not used as a lookup key.
 - `api_hosts: string[]` in TS; `TEXT` (JSON) in SQLite; encode/decode at the DB helper layer exactly once via `decodeSync`.
-- `resolveEgress(syncId, host, appSlug)` returns `{ok: true, accountId} | {ok: false, error}` consistently from DO RPC and gateway's lookup interface.
+- `resolveEgress(userId, syncId, host, appSlug)` returns `{ok: true, accountId} | {ok: false, error}` consistently from DO RPC and gateway's lookup interface.
 - `matchesHost` always lowercases both sides.
 - Facet props shape: `{userId: string, syncId: string}`. Not `{apiHosts, accountId, accounts}` — see "Considered and Rejected" entries 6 and 7.
 
