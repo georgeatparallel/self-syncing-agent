@@ -8,6 +8,12 @@ declare module "cloudflare:test" {
   interface ProvidedEnv extends Env {}
 }
 
+// Phase F, Task 1: the /api/user/:userId/* routes are now wrapped with
+// requireAuthAndUserIdMatch. Every SELF.fetch below has to carry the
+// Access header matching the path :userId or the request 401s/403s.
+// Using the same userId string for both sides satisfies the middleware.
+const CF_ACCESS_HEADER = "cf-access-authenticated-user-email";
+
 function seedSync(instance: unknown, overrides: Partial<NewSync> = {}): string {
   const sql = (instance as { sql: SqlTag }).sql.bind(instance) as SqlTag;
   const id = overrides.id ?? crypto.randomUUID();
@@ -34,7 +40,8 @@ describe("ops panel API", () => {
   it("GET /api/user/:userId/syncs-summary returns empty array for a user with no syncs", async () => {
     const userId = `empty-${crypto.randomUUID()}`;
     const res = await SELF.fetch(
-      `https://test.invalid/api/user/${userId}/syncs-summary`
+      `https://test.invalid/api/user/${userId}/syncs-summary`,
+      { headers: { [CF_ACCESS_HEADER]: userId } }
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { syncs: unknown[] };
@@ -68,7 +75,8 @@ describe("ops panel API", () => {
     });
 
     const res = await SELF.fetch(
-      `https://test.invalid/api/user/${userId}/syncs-summary`
+      `https://test.invalid/api/user/${userId}/syncs-summary`,
+      { headers: { [CF_ACCESS_HEADER]: userId } }
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -88,7 +96,8 @@ describe("ops panel API", () => {
   it("GET /syncs/:syncId/details returns 404 for unknown sync", async () => {
     const userId = `detail-404-${crypto.randomUUID()}`;
     const res = await SELF.fetch(
-      `https://test.invalid/api/user/${userId}/syncs/00000000-0000-0000-0000-000000000000/details`
+      `https://test.invalid/api/user/${userId}/syncs/00000000-0000-0000-0000-000000000000/details`,
+      { headers: { [CF_ACCESS_HEADER]: userId } }
     );
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: string };
@@ -142,7 +151,8 @@ describe("ops panel API", () => {
     });
 
     const res = await SELF.fetch(
-      `https://test.invalid/api/user/${userId}/syncs/${syncId!}/details`
+      `https://test.invalid/api/user/${userId}/syncs/${syncId!}/details`,
+      { headers: { [CF_ACCESS_HEADER]: userId } }
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as {

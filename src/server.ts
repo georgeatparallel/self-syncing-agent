@@ -25,6 +25,7 @@ import {
 import type { ConnectedAccount } from "./db/types";
 import { getCachedAccessToken, createConnectToken } from "./pipedream";
 import { attachFacet } from "./facet/loader";
+import { requireAuth, requireAuthAndUserIdMatch } from "./auth/middleware";
 
 export { HttpGateway } from "./proxy/http-gateway";
 export { LLMGateway } from "./agent-runtime/llm-gateway";
@@ -520,45 +521,70 @@ app.all("/webhook/:userId/:syncId", (c) =>
   c.text("method not allowed", 405, { Allow: "POST" })
 );
 
-app.get("/api/user/:userId/syncs-summary", async (c) => {
-  const { userId } = c.req.param();
-  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
-  const syncs = await stub.listSyncsSummary();
-  return c.json({ syncs });
-});
+// "Who am I?" — the client bootstraps off this to know which Durable
+// Object namespace it belongs to. Intentionally does NOT include a
+// :userId path segment; the authenticated email IS the answer.
+app.get("/api/auth/me", requireAuth, (c) => c.json({ userId: c.var.userId }));
 
-app.get("/api/user/:userId/syncs/:syncId/details", async (c) => {
-  const { userId, syncId } = c.req.param();
-  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
-  const details = await stub.getSyncDetails(userId, syncId);
-  if (!details) return c.json({ error: "not_found" }, 404);
-  return c.json(details);
-});
-
-app.post("/api/user/:userId/pipedream/token", async (c) => {
-  const { userId } = c.req.param();
-  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
-  const result = await stub.mintPipedreamToken(userId);
-  return c.json(result);
-});
-
-app.post("/api/user/:userId/pipedream/account", async (c) => {
-  const { userId } = c.req.param();
-  const body = await c.req.json<{ app_slug?: string; account_id?: string }>();
-  if (!body.app_slug || !body.account_id) {
-    return c.json({ error: "missing_fields" }, 400);
+app.get(
+  "/api/user/:userId/syncs-summary",
+  requireAuthAndUserIdMatch,
+  async (c) => {
+    const { userId } = c.req.param();
+    const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+    const syncs = await stub.listSyncsSummary();
+    return c.json({ syncs });
   }
-  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
-  await stub.persistPipedreamAccount(userId, body.app_slug, body.account_id);
-  return c.json({ ok: true });
-});
+);
 
-app.get("/api/user/:userId/pipedream/accounts", async (c) => {
-  const { userId } = c.req.param();
-  const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
-  const accounts = await stub.listPipedreamAccounts(userId);
-  return c.json({ accounts });
-});
+app.get(
+  "/api/user/:userId/syncs/:syncId/details",
+  requireAuthAndUserIdMatch,
+  async (c) => {
+    const { userId, syncId } = c.req.param();
+    const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+    const details = await stub.getSyncDetails(userId, syncId);
+    if (!details) return c.json({ error: "not_found" }, 404);
+    return c.json(details);
+  }
+);
+
+app.post(
+  "/api/user/:userId/pipedream/token",
+  requireAuthAndUserIdMatch,
+  async (c) => {
+    const { userId } = c.req.param();
+    const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+    const result = await stub.mintPipedreamToken(userId);
+    return c.json(result);
+  }
+);
+
+app.post(
+  "/api/user/:userId/pipedream/account",
+  requireAuthAndUserIdMatch,
+  async (c) => {
+    const { userId } = c.req.param();
+    const body = await c.req.json<{ app_slug?: string; account_id?: string }>();
+    if (!body.app_slug || !body.account_id) {
+      return c.json({ error: "missing_fields" }, 400);
+    }
+    const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+    await stub.persistPipedreamAccount(userId, body.app_slug, body.account_id);
+    return c.json({ ok: true });
+  }
+);
+
+app.get(
+  "/api/user/:userId/pipedream/accounts",
+  requireAuthAndUserIdMatch,
+  async (c) => {
+    const { userId } = c.req.param();
+    const stub = c.env.ChatAgent.get(c.env.ChatAgent.idFromName(userId));
+    const accounts = await stub.listPipedreamAccounts(userId);
+    return c.json({ accounts });
+  }
+);
 
 // Fallthrough: everything else (chat WebSocket upgrade, MCP, etc.)
 // goes to the Agents SDK router.
