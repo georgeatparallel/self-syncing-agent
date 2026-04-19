@@ -111,6 +111,45 @@ When to reach for it: the user asks for runtime reasoning on each delivery ("tri
 
 Do NOT reach for it for simple filtering or data shaping — deterministic JS is cheaper and faster.
 
+## Webhook idempotency
+
+Upstreams retry, and many fire bursts for a single logical event (Linear's create→update within 200ms, GitHub's issue opened + labeled, etc.). Handlers that only UPSERT into local tables are naturally idempotent — the same row lands twice, no harm done. Handlers that do **side-effectful work** are not: \`ctx.agent(...)\` costs tokens on every call, and anything it writes upstream (Slack post, issue comment, email) will duplicate.
+
+**When to add dedup:** the handler calls \`ctx.agent\`, writes to an upstream API, or does any work whose second execution is visible to the user. Pure local mirrors skip this.
+
+**Pattern:** a dedup table in the facet's own schema, claimed via \`INSERT OR IGNORE\` before firing the side effect. SQLite's atomicity on the INSERT is the mutex.
+
+\`\`\`sql
+CREATE TABLE IF NOT EXISTS agent_dedup (
+  dedup_key TEXT PRIMARY KEY,
+  claimed_at INTEGER NOT NULL
+);
+\`\`\`
+
+\`\`\`ts
+// opportunistic sweep — keeps the table small, no cron needed
+sql.exec("DELETE FROM agent_dedup WHERE claimed_at < ?", Date.now() - WINDOW_MS);
+
+const key = \`\${resource.id}:\${Math.floor(Date.now() / WINDOW_MS)}\`;
+const claimed = sql.exec(
+  "INSERT OR IGNORE INTO agent_dedup (dedup_key, claimed_at) VALUES (?, ?)",
+  key, Date.now()
+).rowsWritten > 0;
+
+if (claimed) {
+  ctx.waitUntil(ctx.agent({ ... }));
+}
+\`\`\`
+
+**Picking the key:**
+- \`resource_id + time-bucket\` (default) — coalesces bursts on the same entity within the window. Matches the create→update case.
+- \`sha256(resource_id + fields_the_agent_reads)\` — re-fires when the semantic state changes (priority flip, status change) but dedups repeated deliveries of the same state.
+- \`resource_id\` alone with TTL — coarsest, "at most one run per entity per window." Use when the agent call is expensive and the user explicitly wants that rate limit.
+
+**Picking the window:** observed burst size × safety margin. 30s–10min is the usable range. Wider = miss legitimate re-runs; narrower = let duplicates through.
+
+**Caveat to flag to the user if relevant:** the claim is recorded before the side effect runs. If the facet crashes between claim and completion, the work is lost (no retry). Tolerable for enrichment; not for must-deliver pipelines — those need a two-phase claim-then-ack pattern, which is out of scope for the default dedup primitive.
+
 ## Debugging a sync that was working and went silent
 
 This is the BACKUP path — at setup time the probe loop's Phase 2 already catches verifier bugs. This rubric is for the other scenario: a sync that was landing real data stops doing so, and \`<sync_errors>\` shows accumulated 401s.
