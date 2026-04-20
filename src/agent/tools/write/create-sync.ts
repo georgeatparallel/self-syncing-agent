@@ -76,7 +76,7 @@ const LINEAR_API = "https://api.linear.app/graphql";
 export async function registerWebhook(fetch, { callbackUrl, label }) {
   const res = await fetch(LINEAR_API, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "X-Pd-App": "linear", "content-type": "application/json" },
     body: JSON.stringify({
       query: \`mutation($url: String!, $types: [String!]!, $label: String!) {
         webhookCreate(input: { url: $url, resourceTypes: $types, allPublicTeams: true, label: $label }) {
@@ -97,7 +97,7 @@ export async function registerWebhook(fetch, { callbackUrl, label }) {
 export async function unregisterWebhook(fetch, { id }) {
   const res = await fetch(LINEAR_API, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "X-Pd-App": "linear", "content-type": "application/json" },
     body: JSON.stringify({
       query: \`mutation($id: String!) { webhookDelete(id: $id) { success } }\`,
       variables: { id }
@@ -146,7 +146,7 @@ export async function registerWebhook(fetch, { callbackUrl, label }) {
 
   const res = await fetch(GH_API, {
     method: "POST",
-    headers: { "content-type": "application/json", "accept": "application/vnd.github+json" },
+    headers: { "X-Pd-App": "github", "content-type": "application/json", "accept": "application/vnd.github+json" },
     body: JSON.stringify({
       name: "web",
       active: true,
@@ -160,7 +160,10 @@ export async function registerWebhook(fetch, { callbackUrl, label }) {
 }
 
 export async function unregisterWebhook(fetch, { id }) {
-  const res = await fetch(\`\${GH_API}/\${id}\`, { method: "DELETE" });
+  const res = await fetch(\`\${GH_API}/\${id}\`, {
+    method: "DELETE",
+    headers: { "X-Pd-App": "github" }
+  });
   // GitHub returns 204 on success, 404 if already gone — both fine.
   if (!res.ok && res.status !== 404) {
     throw new Error("GitHub webhook delete failed: " + res.status);
@@ -252,7 +255,7 @@ export async function handleWebhook(request, sql, ctx) {
         .string()
         .optional()
         .describe(
-          "One-line human summary of what this sync tracks, e.g. 'only issues labeled bug in Core team'. Displayed in the UI and in ambient context."
+          "One-line human summary of what this sync tracks, e.g. 'only issues labeled bug in Core team'. Displayed in the UI."
         ),
       api_hosts: z
         .array(z.string().min(1))

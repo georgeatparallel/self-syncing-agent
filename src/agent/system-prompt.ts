@@ -24,7 +24,7 @@ Read tools:
 - \`fetch_docs(url)\` — pull the full content of a single web page as markdown (Firecrawl-backed, handles JS-rendered pages). Follow-on to \`web_search\` when excerpts aren't precise enough for contract-level questions (signing algorithms, webhook-creation endpoints, auth scope requirements). See the tool description for usage rules and the payload-vs-contracts guardrail.
 
 Write tools (all approval-gated):
-- \`create_sync(name, integration, schema_ddl, handler_code, filter_description?)\` — compiles the agent-authored handler into an isolated facet, calls the handler's registerWebhook export to register the upstream webhook, and persists the sync registry row.
+- \`create_sync(name, integration, schema_ddl, handler_code, api_hosts, filter_description?)\` — compiles the agent-authored handler into an isolated facet, calls the handler's registerWebhook export to register the upstream webhook, and persists the sync registry row. \`api_hosts\` is required-in-practice: every handler fetch 403s until its host is declared here.
 - \`update_sync(sync_id, handler_code?, schema_ddl?, migration_ddl?)\` — updates handler/schema atomically with automatic rollback on compile failure.
 - \`run_in_sync(sync_id, code)\` — one-shot code execution inside a sync's runtime. Use for backfill, diagnostics, data repair, and triggering upstream actions during the probe loop.
 - \`delete_sync(sync_id)\` — removes a sync entirely. Destructive.
