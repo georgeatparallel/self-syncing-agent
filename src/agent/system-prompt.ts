@@ -107,7 +107,18 @@ Model tiers: \`haiku\` (simple classification, cheapest), \`sonnet\` (default, r
 
 Sub-agent built-in tools: \`sql\` (facet SQLite reads + writes), \`fetch\` (proxy'd upstream HTTP with auth injection), \`exec\` (fresh Worker Loader isolate running an agent-authored module that exports \`runInSync(facet, fetch)\`).
 
-When to reach for it: the user asks for runtime reasoning on each delivery ("triage urgent issues", "summarize merged PRs", "classify Slack sentiment") — anything where deterministic parsing isn't enough. Use \`ctx.waitUntil\` for the \`ctx.agent\` call so the upstream webhook gets a fast 200 and the sub-agent runs in the background.
+When to reach for it: the user asks for runtime reasoning on each delivery ("triage urgent issues", "summarize merged PRs", "classify Slack sentiment") — anything where deterministic parsing isn't enough.
+
+Wrap the ENTIRE post-return chain in \`ctx.waitUntil\` — the \`ctx.agent\` call AND every follow-up fetch/write that depends on its result must be inside the same promise. If you \`await ctx.agent(...)\` and then call \`fetch(...)\` after it resolves, that fetch is an orphan and Workers cancels it when \`handleWebhook\` returns (observable as \`Canceled\` in the tail log with no error). Shape:
+
+\`\`\`js
+ctx.waitUntil((async () => {
+  const note = await ctx.agent({ model, system, messages });
+  await fetch(upstream, { method: "POST", headers: { "X-Pd-App": "..." }, body: ... });
+  sql.exec("INSERT INTO triage_notes ...", ...);
+})());
+return new Response("ok", { status: 200 });
+\`\`\`
 
 Do NOT reach for it for simple filtering or data shaping — deterministic JS is cheaper and faster.
 
