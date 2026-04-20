@@ -168,8 +168,8 @@ These invariants are demonstrable, not aspirational. Each has a single mechanism
 **Steps**
 
 ```bash
-git clone <this repo>
-cd sauna-assignment
+git clone https://github.com/rtpa25/self-syncing-agent.git
+cd self-syncing-agent
 pnpm install
 
 cp .dev.vars.example .dev.vars
