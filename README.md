@@ -3,7 +3,7 @@
 > An agent that writes its own webhook handlers and mirrors upstream data into isolated SQLite it owns — so steady-state ingestion runs without an LLM in the loop.
 
 **Live demo:** [https://sauna.ronit.one](https://sauna.ronit.one) (sign in with any email; Cloudflare Access sends a one-time PIN)
-**Loom walkthrough:**
+**Loom walkthrough:** [https://www.loom.com/share/225bfa6a576b49298d17d26c0c258b4e](https://www.loom.com/share/225bfa6a576b49298d17d26c0c258b4e)
 
 ---
 
@@ -141,7 +141,19 @@ These invariants are demonstrable, not aspirational. Each has a single mechanism
 | **Agent cannot write without approval.**                                                                                       | `create_sync`, `update_sync`, `run_in_sync`, `delete_sync` all use Agents SDK `needsApproval`. User sees the full generated code + schema + egress allowlist in the UI before anything runs. |
 | **Only authenticated users can reach the app.**                                                                                | Cloudflare Access with one-time-PIN IdP in front of the whole origin. No unauthenticated route exists.                                                                                       |
 
-**Accepted residual:** `X-Pd-App` is agent-set, and the agent's handler code runs on attacker-controlled webhook payloads. An attacker can't exfiltrate to undeclared hosts (the `api_hosts` gate is pre-attacker), but could route a declared host through the _wrong_ connected app's credentials. Damage ceiling: a wrong-audience Bearer token rejected at the real target. No token or user data reaches attacker infrastructure. This is the tradeoff for cross-app flexibility (a Linear sync handler _can_ post to Slack if the user approved both).
+### Threat model — webhook-driven prompt injection
+
+The handler's `ctx.agent` runs on attacker-controlled webhook payloads. A malicious issue title, Slack message, or Linear comment can attempt prompt-injection against the sub-agent LLM, potentially tricking it into `fetch(...)` with the user's OAuth token pointed at the attacker's infrastructure. The architecture is designed around this being a real attacker goal, not a hypothetical.
+
+Three stacked defenses bound the blast radius:
+
+1. **SSRF denylist (absolute floor).** Private IPs, loopback, cloud metadata, `*.internal`, `*.local` — rejected before any agent, user, or DO input is consulted. Prompt injection cannot lift this.
+2. **`api_hosts` allowlist (per-sync, user-approved).** Declared by the agent at `create_sync` but **gated by user approval** before anything runs. A runtime prompt injection cannot add a host to this list — only the supervisor-side write tools can modify it, and every write is approval-gated. So the compromised sub-agent can only reach hosts the user already consented to.
+3. **`X-Pd-App` token routing (agent-settable).** The only layer a prompt-injected sub-agent can actually manipulate. Damage ceiling: the attacker flips the app slug on a declared host (e.g. posts to `api.slack.com` with the Linear token). The real upstream rejects the wrong-audience Bearer. No token exfiltration, no data reaches attacker infrastructure.
+
+The security model treats the handler as hostile and trusts only the supervisor-side approval gates + SSRF floor. Everything the agent can mutate at runtime is bounded by things the user approved at create-time.
+
+**Accepted residual:** the `X-Pd-App` wrong-audience case above is the one direction where an in-flight prompt injection has observable effect. We accept it in exchange for cross-app flexibility (a Linear sync handler can post to Slack if the user approved both at create-time). Damage ceiling stays at "wrong-audience Bearer rejected at the real target" — no token or user data reaches attacker infrastructure.
 
 ---
 
