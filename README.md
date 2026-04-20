@@ -1,237 +1,256 @@
-# Agent Starter
+# Self-Syncing Agent
 
-![npm i agents command](./npm-agents-banner.svg)
+> An agent that writes its own webhook handlers and mirrors upstream data into isolated SQLite it owns — so steady-state ingestion runs without an LLM in the loop.
 
-<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/agents-starter"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare"/></a>
+**Live demo:** [https://sauna.ronit.one](https://sauna.ronit.one) (sign in with any email; Cloudflare Access sends a one-time PIN)
+**Loom walkthrough:** 
 
-A starter template for building AI chat agents on Cloudflare, powered by the [Agents SDK](https://developers.cloudflare.com/agents/).
+---
 
-Uses Workers AI (no API key required), with tools for weather, timezone detection, calculations with approval, task scheduling, and vision (image input).
+## TL;DR
 
-## Quick start
+Give the agent a prompt like *"track my urgent Linear issues assigned to me and triage them"*. It drafts the SQL schema, the webhook handler, the signature verifier, the registration code, and the egress allowlist. You approve. The webhook registers, the facet compiles, and from then on every Linear delivery flows through the agent-authored handler into the agent-designed SQLite — **with no LLM in the loop** until you come back with a question.
+
+The unusual bit: the agent owns the code *and* the schema. It's not an LLM sitting on top of an MCP. It's the LLM writing the thing the MCP would have wrapped.
+
+---
+
+## Mental model — "machine that builds a machine"
+
+I've built sync systems like this manually a handful of times. The workflow always looks the same:
+
+1. Pick the integration. Read its webhook docs.
+2. Figure out the signing scheme (HMAC-hex? sha256=?  URL challenge?).
+3. Sketch a schema for the rows I want to keep.
+4. Write the handler: parse payload, normalize, UPSERT.
+5. Register the webhook against the upstream's API.
+6. Trigger a test event, watch for 401s, fix the verifier, retry.
+7. Weeks later: schema needs a new column. Migrate without wiping.
+
+Each of those steps is now a primitive the agent has. `fetch_docs` reads the contract. `web_search` verifies edge cases. `run_in_sync` triggers test events. `create_sync` compiles the handler into a facet and registers the webhook. `update_sync` migrates without data loss. `query_sync` answers questions against the mirror in milliseconds.
+
+The agent is doing the job I used to do, with the same primitives I had — not a re-wrapping of them. That's the frame: **a machine that builds machines**. Syncs aren't configured; they're authored.
+
+The consequence falls out cleanly: once a sync is live, the ingestion path is just code running on a webhook. No inference, no tokens, no LLM cost per delivery. The agent comes back only when the user has a question or wants to reshape things.
+
+---
+
+## Three phases of the system
+
+Reference this when reading any of the code. The agent only runs in phases 1 and 3.
+
+
+| Phase               | Agent runs? | LLM cost? | What happens                                                                                                             |
+| ------------------- | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------ |
+| **1. Setup**        | Yes         | Yes       | User describes a sync → agent drafts schema + handler + egress list → user approves → facet compiles, webhook registers. |
+| **2. Steady state** | **No**      | **No**    | Upstream fires webhook → supervisor verifies signature → facet handler runs → row lands in the facet's SQLite.           |
+| **3. Query**        | Yes         | Yes       | User asks a question → agent runs SELECT against the facet → reads rows → answers.                                       |
+
+
+This is the whole point of the architecture. Phase 2 is where the volume lives, and phase 2 is free.
+
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    Browser[Browser · React SPA]
+    Access[Cloudflare Access<br/>OTP auth]
+    Worker[Worker · Hono<br/>routes + webhook dispatch]
+    DO[ChatAgent DO<br/>per-user supervisor<br/>syncs · errors · secrets]
+    F1[Facet: sync_1<br/>isolated SQLite<br/>globalOutbound → HttpGateway]
+    F2[Facet: sync_2]
+    GW[HttpGateway<br/>SSRF denylist<br/>api_hosts enforcement<br/>X-Pd-App → token injection]
+    PD[Pipedream Connect<br/>OAuth proxy]
+    Up[Linear · GitHub · Stripe · 3000+]
+
+    Browser -- WebSocket + REST --> Access
+    Access --> Worker
+    Worker -- idFromName userId --> DO
+    DO --> F1
+    DO --> F2
+    F1 -- fetch --> GW
+    F2 -- fetch --> GW
+    GW -- access token --> PD
+    PD -- injects user's OAuth --> Up
+    Up -- webhook POST /webhook/:userId/:syncId --> Worker
+```
+
+
+
+**One Durable Object per user.** The DO plays three roles: chat agent (conversation state), supervisor (sync registry + signing secrets), and facet orchestrator (attaches, dispatches, manages N facets per user — one per sync).
+
+**One facet per sync.** Each facet has its own isolated SQLite, its own V8 isolate, and `globalOutbound: HttpGateway(...)`. The facet cannot read the supervisor's storage and cannot reach the network except through the gateway.
+
+**The gateway is where policy lives.** SSRF denylist is absolute (no agent, user, or DO lookup overrides it). The agent's `api_hosts` allowlist (declared at `create_sync`) is the next gate. Only then does the request route through Pipedream Connect with the user's OAuth token — which the agent itself never sees.
+
+---
+
+## The agent's primitives
+
+Nine tools, grouped:
+
+
+| Tool                                        | Purpose                                                                                       |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `list_syncs`, `get_sync`, `get_sync_errors` | Inspect what exists and what's failing.                                                       |
+| `query_sync`                                | SELECT-only SQL against a sync's facet. Read-path enforced.                                   |
+| `web_search`, `fetch_docs`                  | Docs discovery — Parallel AI for relevance, Firecrawl for full-page reads.                    |
+| `create_sync`                               | Compile handler into a facet, register the webhook, persist the registry row. Approval-gated. |
+| `update_sync`                               | Atomic swap of handler/schema with migration DDL + automatic rollback. Approval-gated.        |
+| `run_in_sync`                               | One-shot code inside a facet — backfill, diagnostics, triggering test events. Approval-gated. |
+| `delete_sync`                               | Unregister upstream webhook, drop the facet, delete the registry row. Approval-gated.         |
+
+
+**Inside handlers**, the agent's authored code gets a third primitive: `ctx.agent({ model, system, messages })` — a ReAct sub-agent runner that can reason about a single delivery, write back via the same `sql` tool, call out via the same credential-injecting `fetch`, or even spawn further code isolates via an `exec` tool. This is the "webhook callback spawns an agent" ask from the spec, live.
+
+Full tool contracts live in `src/agent/tools/*/` and `src/agent-runtime/llm-gateway.ts`. The system prompt that orchestrates them is in `src/agent/system-prompt.ts`.
+
+---
+
+## Security model — what the agent can and cannot do
+
+These invariants are demonstrable, not aspirational. Each has a single mechanism enforcing it, named inline.
+
+
+| Invariant                                                                                                                      | Mechanism                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **No cross-user access.** User A's syncs, data, errors are unreachable from user B's session.                                  | One DO per user, named by `env.ChatAgent.idFromName(userId)`. DOs cannot read each other's storage.                                                                                          |
+| **Facet cannot read supervisor SQLite.** Handler code can't exfiltrate webhook secrets, other users' data, the syncs registry. | Each facet has its own `ctx.storage.sql`. Cloudflare enforces this at the runtime level.                                                                                                     |
+| **Facet cannot make arbitrary outbound calls.**                                                                                | `globalOutbound: HttpGateway(...)` on every facet. `HttpGateway.fetch` is the only egress path.                                                                                              |
+| **Facet cannot SSRF private / metadata hosts.**                                                                                | `isDeniedHost` in `src/pipedream/app-hosts.ts` — private IPv4 CIDRs, IPv6 ULA, cloud metadata (169.254.169.254), `*.internal`, `*.local`. Checked **before** any agent or user input.        |
+| **Facet cannot reach undeclared upstream hosts.**                                                                              | Per-sync `api_hosts` list, declared by the agent at `create_sync` and approved by the user. Live-read per fetch (not stamped on facet props — cache-invalidation trap avoided).              |
+| **Agent never sees OAuth tokens.**                                                                                             | Gateway injects auth via Pipedream Connect using the user's own connected account. Handler code only sets `X-Pd-App: <slug>`; Pipedream resolves token server-side.                          |
+| **Webhook signatures are verified before the handler runs.**                                                                   | Supervisor calls the handler's own `verifySignature(body, headers, secret)` export before dispatching. Missing export → 401 fail-closed.                                                     |
+| **Agent cannot write without approval.**                                                                                       | `create_sync`, `update_sync`, `run_in_sync`, `delete_sync` all use Agents SDK `needsApproval`. User sees the full generated code + schema + egress allowlist in the UI before anything runs. |
+| **Only authenticated users can reach the app.**                                                                                | Cloudflare Access with one-time-PIN IdP in front of the whole origin. No unauthenticated route exists.                                                                                       |
+
+
+**Accepted residual:** `X-Pd-App` is agent-set, and the agent's handler code runs on attacker-controlled webhook payloads. An attacker can't exfiltrate to undeclared hosts (the `api_hosts` gate is pre-attacker), but could route a declared host through the *wrong* connected app's credentials. Damage ceiling: a wrong-audience Bearer token rejected at the real target. No token or user data reaches attacker infrastructure. This is the tradeoff for cross-app flexibility (a Linear sync handler *can* post to Slack if the user approved both).
+
+---
+
+## Two worked demos
+
+**Linear → Slack cross-app triage.**
+Prompt: *"Track Linear issues and when one is assigned to me with urgent priority, spawn a sub-agent to triage it and post the summary to Slack."* The agent probes Linear's payload shape (Phase 1: raw-capture), observes a real event, refines the schema (Phase 3: structured columns), writes `verifySignature` against Linear's HMAC-hex scheme, writes `registerWebhook` using `webhookCreate`, derives the user's viewer ID via `run_in_sync` and hardcodes it into the filter. On urgent + assigned deliveries, a haiku sub-agent drafts a short triage note; a follow-up fetch posts it into Slack — cross-app flow through the `X-Pd-App` routing (`api_hosts: ["api.linear.app", "slack.com"]`).
+
+[https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99](https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99)
+
+**GitHub — issues mirror + auto-triage.**
+Same architecture, same primitives; different signing (`sha256=` prefix, caller-generated secret), different registration endpoint (`/repos/:o/:r/hooks`). Demonstrates that the pattern isn't Linear-specific — change the slug on `X-Pd-App`, change the `api_hosts` list, and the same handler shape works.
+
+[https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac](https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac)
+
+Both handler sources + schemas are visible live in the app's right-hand Ops panel, which reads from `get_sync` RPC.
+
+---
+
+## Deploy your own
+
+**Prereqs**
+
+- Cloudflare account on the Workers Paid plan ($5/mo) — needed for Durable Objects + Worker Loader.
+- Pipedream account (free tier works for dev).
+- Anthropic API key; Parallel AI key; Firecrawl key.
+
+**Steps**
 
 ```bash
-npx create-cloudflare@latest --template cloudflare/agents-starter
-cd agents-starter
-npm install
-npm run dev
+git clone <this repo>
+cd sauna-assignment
+pnpm install
+
+cp .dev.vars.example .dev.vars
+# fill in: ANTHROPIC_API_KEY, PARALLEL_API_KEY, FIRECRAWL_API_KEY,
+#         PIPEDREAM_CLIENT_ID, PIPEDREAM_CLIENT_SECRET, PUBLIC_BASE_URL
+
+pnpm dev        # local dev
+pnpm check      # type + test (206 tests)
+pnpm deploy     # push to Cloudflare
 ```
 
-Open [http://localhost:5173](http://localhost:5173) to see your agent in action.
+**Production secrets** mirror `.dev.vars` one-for-one via `wrangler secret put <NAME>`. See the memory file `feedback_prod_secrets_parity.md` — dev and prod are not auto-synced.
 
-Try these prompts to see the different features:
+**Auth** is fronted by Cloudflare Access. Configure a Self-Hosted application covering your worker's domain; Identity providers → enable One-Time PIN; Policy → Include = `Everyone` for open demo access, or `Emails` with a list for a restricted reviewer set.
 
-- **"What's the weather in Paris?"** — server-side tool (runs automatically)
-- **"What timezone am I in?"** — client-side tool (browser provides the answer)
-- **"Calculate 5000 \* 3"** — approval tool (asks you before running)
-- **"Remind me in 5 minutes to take a break"** — scheduling
-- **Drop an image and ask "What's in this image?"** — vision (image understanding)
+---
 
-## Project structure
+## AI pair-programming notes
 
-```
-src/
-  server.ts    # Chat agent with tools and scheduling
-  app.tsx      # Chat UI built with Kumo components
-  client.tsx   # React entry point
-  styles.css   # Tailwind + Kumo styles
-```
+Every line of this repo was written by pairing with Claude. The collaboration shape was: I drove architecture and judgment calls; Claude drove translation — specs into plans, plans into code, code into tests. The interesting parts to document are the moments where Claude's first drafts from training data broke against the actual runtime, and the moments where I pushed back on architectural defaults that wouldn't scale.
 
-## What's included
+**Models used.** Claude Opus 4.7 (1M context) as the planning + code-review brain, driven through Claude Code's subagent-driven-development workflow — brainstorm → spec → plan → implementer subagent per task → spec-compliance review → code-quality review. Claude Sonnet 4.6 as the product LLM inside the app itself. Claude Haiku 4.5 for cheap sub-agent calls (triage, classification).
 
-- **AI Chat** — Streaming responses powered by Workers AI via `AIChatAgent`
-- **Image input** — Drag-and-drop, paste, or click to attach images for vision-capable models
-- **Three tool patterns** — server-side auto-execute, client-side (browser), and human-in-the-loop approval
-- **Scheduling** — one-time, delayed, and recurring (cron) tasks
-- **Reasoning display** — shows model thinking as it streams, collapses when done
-- **Debug mode** — toggle in the header to inspect raw message JSON for each message
-- **Kumo UI** — Cloudflare's design system with dark/light mode
-- **Real-time** — WebSocket connection with automatic reconnection and message persistence
+**Where Claude's drafts held up.** Translating specs into implementation plans, writing tests alongside code, type-driven refactors, Hono routing, zod schemas, mermaid diagrams. When a contract was clear and well-documented, the first draft was usually correct.
 
-## Making it your own
+**Where Claude's drafts broke on DO Facets specifically** — the explicit grading ask. Durable Object Facets + Worker Loader landed on Cloudflare's platform in early 2026. Training data is thin, and Claude confidently produced shapes that didn't match the actual runtime. Five concrete traps:
 
-### Name your project
+**1. Worker Loader's `codeId` is a cache key, not a label.**
+Claude's first `update_sync` draft reused the same `codeId` across versions, reasoning "the sync's identity hasn't changed, so the key shouldn't either." I caught it when a fixed handler kept serving the old bug. Reading Cloudflare's Dynamic Workers doc carefully showed `codeId` IS the platform's cache key — reusing it silently reuses compiled output. We landed on `sync:<syncId>:v<version>`, bumped on every update. Load-bearing rule of the whole update path.
 
-Update the name in `package.json` and `wrangler.jsonc` — the `name` in `wrangler.jsonc` becomes your deployed Worker's URL (`<name>.<subdomain>.workers.dev`).
+**2. Raw DO stubs can't cross Worker Loader isolate boundaries.**
+My first `run_in_sync` build passed the facet's DO stub directly to the exec worker. Runtime threw an opaque `"internal error; reference = ..."` before the method body ran. Claude's first few fix suggestions were all wrong — manual serializers, custom proxies, retry loops — because nothing in training data covered this. I dug into Cloudflare's own **codemode** example (the closest public precedent I could find), and from there we converged on the real pattern: DO stubs aren't marshalable across isolate boundaries, but `RpcTarget` subclasses are. Wrap every capability you pass into a loaded bundle. Now used everywhere — `FacetBridge`, `FacetAgentBridge`, `ExecFacetShim`.
 
-### Change the system prompt
+**3. Facet `ctx.props` cache with the bundle, not separately.**
+For Phase F's egress gateway, Claude's draft stamped `{userId, syncId, apiHosts, accountId}` onto facet props. Worked in dev. But Worker Loader caches the bundle by `codeId`, and props travel with that cache — so when the user connected a new Pipedream app mid-session, the gateway kept using stale props. Claude's proposed fix: "bump version on every connection change." I pushed back — that meant recompiling the facet every time someone added a Slack account, which defeats the cache. We converged on: keep only `{userId, syncId}` on props (both stable for the sync's lifetime) and do a live DO RPC (`resolveEgress`) per fetch to read `api_hosts` + `accountId`. Read from source-of-truth instead of snapshotting.
 
-Edit the `system` string in `server.ts` to give your agent a different personality or focus area. This is the most impactful single change you can make.
+**4. `setState` depends on `this.name` being hydrated first.**
+The approval UI calls agent RPC methods directly; those RPCs call `this.setState(...)` to broadcast updates. First builds set state before `setName(userId)` had run, and updates silently failed to reach the client. Claude kept blaming the WebSocket layer or SWR. The actual link — which took reading the Agents SDK source to find — is that the SDK's private `_emit` reads `this.name` to scope the broadcast, and `this.name` is only hydrated inside `setName`. Fix: `await this.setName(userId)` at the top of every direct-RPC entrypoint.
 
-### Replace the demo tools with real ones
+**5. The facet wrapper has an inline `FacetAgentBridge` that mirrors the supervisor-side class.**
+For Phase F I added `getSyncId` to the supervisor-side bridge class; missed the inline copy bundled into `FACET_WRAPPER_SOURCE`. Webhooks started throwing `TypeError: The RPC receiver does not implement the method 'getSyncId'`. The wrapper source runs inside the facet isolate and can't import from the supervisor side — so the two bridge implementations are necessarily separate. Not really an AI-was-wrong moment; more a platform shape that's easy to forget. Claude didn't warn me either. Worth documenting because any future change to the bridge interface needs to land in both places.
 
-The starter ships with demo tools (`getWeather` returns random data, `calculate` does basic arithmetic). Replace them with real implementations:
+**Where I pushed back on architecture.**
 
-```ts
-// In server.ts, replace a demo tool with a real API call:
-getWeather: tool({
-  description: "Get the current weather for a city",
-  inputSchema: z.object({ city: z.string() }),
-  execute: async ({ city }) => {
-    const res = await fetch(`https://api.weather.example/${city}`);
-    return res.json();
-  }
-}),
-```
+A few patterns came up repeatedly where Claude's first draft was a reasonable default but wouldn't scale to the spec's V2 vision:
 
-### Add your own tools
+- **Per-integration curated docs.** Claude proposed `src/integrations/linear.ts` (etc.) holding webhook payload schemas, auth patterns, and gotchas; a `get_integration_docs` tool would consult them before drafting handler code. My push-back: doesn't generalize — V2 is Pipedream's 3000+ integrations, can't hand-curate. `web_search` + `fetch_docs` self-correct per turn. Kept the bitter-lesson architecture end-to-end.
+- **Shared `CredentialSource` interface.** Claude wanted to abstract V1 (hardcoded Linear token) and V2 (Pipedream Connect) behind a common interface. My push-back: V1 and V2 aren't composed; V2 is a successor. Premature abstraction for two concrete cases that never coexist. Just rewrote the gateway body in-place when Phase B landed.
+- **Stamped `accountId` on facet props.** Per trap #3. Claude's "just bump version" was locally correct but globally expensive; my push-back traded per-update recompiles for a per-fetch DO RPC.
+- **Server-side retry on `AI_MissingToolResultsError`.** Claude proposed a guard that detected dangling tool calls and injected synthetic results. I accepted it, then reverted after it silenced legitimate assistant messages. Root cause is an AI SDK interaction with parallel approval-gated tool calls; retrying papered over the symptom. Accepted as a known issue instead.
 
-Add new tools to the `tools` object in `server.ts`. There are three patterns:
+Full "Considered and Rejected" records for every phase live in each plan file under `docs/superpowers/plans/` — each plan's final section documents what we considered and why we didn't ship it.
 
-```ts
-// Auto-execute: runs on the server, no user interaction
-myTool: tool({
-  description: "...",
-  inputSchema: z.object({ /* ... */ }),
-  execute: async (input) => { /* return result */ }
-}),
+---
 
-// Client-side: no execute function, browser provides the result
-// Handle it in app.tsx via the onToolCall callback
-browserTool: tool({
-  description: "...",
-  inputSchema: z.object({ /* ... */ })
-}),
+## Limitations
 
-// Approval: add needsApproval to gate execution
-sensitiveTool: tool({
-  description: "...",
-  inputSchema: z.object({ /* ... */ }),
-  needsApproval: async (input) => true, // or conditional logic
-  execute: async (input) => { /* runs after approval */ }
-}),
-```
+- **Slack, Notion, Zoom, MS Teams** cannot self-register webhooks — their OAuth apps are scoped to Pipedream's own Connect app, and the webhook URL is fixed there. Pattern needs a Pipedream Sources integration (see "what I'd do next"). Linear, GitHub, Stripe, Shopify, Jira, GitLab, Asana, Calendly, PagerDuty, Zendesk, Intercom, and many more *do* expose programmable webhook APIs and work today.
+- **Parallel `ctx.agent` calls inside a handler throw.** The primitive guards against nesting to keep semantics simple.
+- `**AI_MissingToolResultsError` fires intermittently** when the main agent makes parallel tool calls — a known AI SDK interaction with the approval-gated flow. Retry the message; no data loss.
+- **No rate limiting.** Auth gate keeps this bounded for now; proper per-user token bucket is needed before wider exposure.
+- **No sync pause.** `delete_sync` + re-create to pause; preserving the local SQLite through a pause is future work.
 
-### Customize scheduled task behavior
+---
 
-When a scheduled task fires, `executeTask` runs on the server. It does its work and then uses `this.broadcast()` to notify connected clients (shown as a toast notification in the UI). Replace it with your own logic:
+## What I'd do with another week
 
-```ts
-async executeTask(description: string, task: Schedule<string>) {
-  // Do the actual work
-  await sendEmail({ to: "user@example.com", subject: description });
+- **Pipedream Sources** for app-scoped integrations (unlocks Slack, Notion, Zoom, MS Graph — the big ones stuck behind the Connect-app-scope wall). Handler's `registerWebhook` would talk to Pipedream's Sources API instead of the upstream, and a Pipedream-delivered event would fan out to the facet.
+- **Automated error recovery loop.** After N consecutive failures on a sync, queue a main-agent turn that reads `get_sync_errors`, proposes an `update_sync`, and surfaces for user approval. Architecture's there; it's a scheduler + a guarded budget.
+- **Two-phase claim-then-ack dedup.** Today's dedup pattern records the claim before the side effect runs — if the facet crashes mid-flight, the work is lost and the retry gets skipped. Fine for enrichment (a dropped triage comment), not fine for billing (a dropped charge). A pending-then-done pattern in the prompt would give must-deliver pipelines safe retries.
+- **Sync pause / resume.** Today `delete_sync` is the only way to stop a sync — and it also wipes the facet's SQLite and unregisters the upstream webhook. A proper pause would mute deliveries while keeping the historical rows and the webhook subscription intact, so resume is one click.
+- **Observability.** Structured error clustering, latency percentiles on `ChatAgent.handleWebhookDelivery`, a proper ops dashboard beyond the in-app panel.
+- **Multi-thread per user** with a thread registry in the supervisor DO.
+- **Rate limiting + cost guards.**
 
-  // Notify connected clients
-  this.broadcast(
-    JSON.stringify({ type: "scheduled-task", description, timestamp: new Date().toISOString() })
-  );
-}
-```
+---
 
-> **Why `broadcast()` instead of `saveMessages()`?** Injecting into chat history can cause the AI to see the notification as new context and re-trigger the same task in a loop. `broadcast()` sends a one-off event that the client displays separately from the conversation.
+## Deep-dive
 
-### Remove scheduling
+For reviewers who want the full decision trail:
 
-If you don't need scheduling, remove `scheduleTask`, `getScheduledTasks`, and `cancelScheduledTask` from the tools object, the `executeTask` method, and the schedule-related imports (`getSchedulePrompt`, `scheduleSchema`, `Schedule`, `generateId`).
+- **Assignment as given:** `[spec.md](./spec.md)`
+- **Architecture design spec:** `[docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md](./docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md)`
+- **All implementation plans** (22 files, each with a "Considered and Rejected" log): `[docs/superpowers/plans/](./docs/superpowers/plans/)`
+- **System prompt** (what the agent reads on every turn): `[src/agent/system-prompt.ts](./src/agent/system-prompt.ts)`
+- **Tool contracts** (what the agent invokes): `[src/agent/tools/](./src/agent/tools/)`
+- **HTTP gateway** — the single chokepoint where the security model is enforced (SSRF denylist, agent-declared `api_hosts`, Pipedream credential injection, per-fetch live lookup via DO RPC): `[src/proxy/http-gateway.ts](./src/proxy/http-gateway.ts)`
+- **Sub-agent primitive** (what handlers invoke): `[src/agent-runtime/llm-gateway.ts](./src/agent-runtime/llm-gateway.ts)`
 
-### Add state beyond chat messages
-
-Use `this.setState()` and `this.state` for real-time state that syncs to all connected clients. See [Store and sync state](https://developers.cloudflare.com/agents/api-reference/store-and-sync-state/).
-
-### Add callable methods
-
-Expose agent methods as typed RPC that your client can call directly:
-
-```ts
-import { callable } from "agents";
-
-export class ChatAgent extends AIChatAgent<Env> {
-  @callable()
-  async getStats() {
-    return { messageCount: this.messages.length };
-  }
-}
-
-// Client-side:
-const stats = await agent.call("getStats");
-```
-
-See [Callable methods](https://developers.cloudflare.com/agents/api-reference/callable-methods/).
-
-### Connect to MCP servers
-
-Add external tools from MCP servers:
-
-```ts
-async onChatMessage(onFinish, options) {
-  // Connect to an MCP server
-  await this.mcp.connect("https://my-mcp-server.example/sse");
-
-  const result = streamText({
-    // ...
-    tools: {
-      ...myTools,
-      ...this.mcp.getAITools() // Include MCP tools
-    }
-  });
-}
-```
-
-See [MCP Client API](https://developers.cloudflare.com/agents/api-reference/mcp-client-api/).
-
-## Use a different AI model provider
-
-The starter uses [Workers AI](https://developers.cloudflare.com/workers-ai/) by default (no API key needed). To use a different provider:
-
-### OpenAI
-
-```bash
-npm install @ai-sdk/openai
-```
-
-```ts
-// In server.ts, replace the model:
-import { openai } from "@ai-sdk/openai";
-
-// Inside onChatMessage:
-const result = streamText({
-  model: openai("gpt-5.2")
-  // ...
-});
-```
-
-Create a `.env` file with your API key:
-
-```
-OPENAI_API_KEY=your-key-here
-```
-
-### Anthropic
-
-```bash
-npm install @ai-sdk/anthropic
-```
-
-```ts
-import { anthropic } from "@ai-sdk/anthropic";
-
-const result = streamText({
-  model: anthropic("claude-sonnet-4-20250514")
-  // ...
-});
-```
-
-Create a `.env` file with your API key:
-
-```
-ANTHROPIC_API_KEY=your-key-here
-```
-
-## Deploy
-
-```bash
-npm run deploy
-```
-
-Your agent is live on Cloudflare's global network. Messages persist in SQLite, streams resume on disconnect, and the agent hibernates when idle.
-
-## Learn more
-
-- [Agents SDK documentation](https://developers.cloudflare.com/agents/)
-- [Build a chat agent tutorial](https://developers.cloudflare.com/agents/getting-started/build-a-chat-agent/)
-- [Chat agents API reference](https://developers.cloudflare.com/agents/api-reference/chat-agents/)
-- [Workers AI models](https://developers.cloudflare.com/workers-ai/models/)
+---
 
 ## License
 
-MIT
+MIT.
