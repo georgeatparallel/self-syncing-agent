@@ -154,8 +154,6 @@ Three stacked defenses bound the blast radius:
 
 The security model treats the handler as hostile and trusts only the supervisor-side approval gates + SSRF floor. Everything the agent can mutate at runtime is bounded by things the user approved at create-time.
 
-**Accepted residual:** the `X-Pd-App` wrong-audience case above is the one direction where an in-flight prompt injection has observable effect. We accept it in exchange for cross-app flexibility (a Linear sync handler can post to Slack if the user approved both at create-time). Damage ceiling stays at "wrong-audience Bearer rejected at the real target" — no token or user data reaches attacker infrastructure.
-
 ---
 
 ## Deploy your own
