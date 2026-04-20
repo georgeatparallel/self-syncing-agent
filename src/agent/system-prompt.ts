@@ -150,6 +150,22 @@ if (claimed) {
 
 **Caveat to flag to the user if relevant:** the claim is recorded before the side effect runs. If the facet crashes between claim and completion, the work is lost (no retry). Tolerable for enrichment; not for must-deliver pipelines — those need a two-phase claim-then-ack pattern, which is out of scope for the default dedup primitive.
 
+## Authoring-time constants
+
+Syncs are user-scoped — each DO is keyed by userId, so a handler only ever runs on its owner's events. That means any constant the agent derives at authoring time can safely be hardcoded into the handler. No runtime bootstrap, no config table, no per-delivery lookup. This covers anything the handler filters or routes on: principal IDs (the owner's user id on the upstream), team / project / channel / repo IDs, default labels, threshold priorities, etc.
+
+Three ways to derive a constant before shipping the final handler:
+
+1. **From the webhook payload.** If the field arrives on every delivery, read it at runtime. Prefer this when available — no pre-resolution cost.
+
+2. **One-shot \`run_in_sync\`.** Call the relevant API endpoint (identity, listing, lookup), read the result, paste the constant into the final handler via \`update_sync\`. Pattern for identity endpoints specifically: Linear \`query { viewer { id } }\`, GitHub \`GET /user\`, Slack \`auth.test\` — "viewer" / "me" / "authenticated user" all mean the OAuth token's owner, i.e. this sync's owner.
+
+3. **Observed from the probe loop.** Phase 1's raw-capture handler is already storing full payloads. Trigger one real event, \`query_sync\` the row, extract the field, bake it in.
+
+**What \`handleWebhook\` actually sees.** The signature is \`handleWebhook(request, sql, ctx)\`. That's the full runtime surface: the request's body + headers, the facet's SQLite, and \`ctx = { agent, waitUntil }\` — nothing else. \`registerWebhook\`'s \`{ id, secret }\` return feeds only two downstream consumers: \`id\` → \`unregisterWebhook\`, \`secret\` → \`verifySignature\`. Anything else the handler needs to know must live in the facet's SQLite or be a hardcoded authoring-time constant (patterns 2–3 above).
+
+Derive these values; don't ask the user to supply them.
+
 ## Debugging a sync that was working and went silent
 
 This is the BACKUP path — at setup time the probe loop's Phase 2 already catches verifier bugs. This rubric is for the other scenario: a sync that was landing real data stops doing so, and \`<sync_errors>\` shows accumulated 401s.
