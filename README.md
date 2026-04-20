@@ -231,12 +231,14 @@ Full "Considered and Rejected" records for every phase live in each plan file un
 - `**AI_MissingToolResultsError` fires intermittently\*\* when the main agent makes parallel tool calls — a known AI SDK interaction with the approval-gated flow. Retry the message; no data loss.
 - **No rate limiting.** Auth gate keeps this bounded for now; proper per-user token bucket is needed before wider exposure.
 - **No sync pause.** `delete_sync` + re-create to pause; preserving the local SQLite through a pause is future work.
+- **No expiring-channel rotation.** Some upstreams (Google Calendar, Drive, Sheets, Gmail, Airtable, Dropbox, etc.) use a "watch channel" pattern where the webhook subscription has a hard TTL (Gcal caps at ~7 days, Drive at ~8, Airtable at 7) and must be renewed before expiry. The current `registerWebhook` primitive is one-shot; there's no scheduled-job mechanism to re-register before a channel dies. Syncs for these services work until the first channel expiry, then go silent.
 
 ---
 
 ## What I'd do with another week
 
 - **Pipedream Sources** for app-scoped integrations (unlocks Slack, Notion, Zoom, MS Graph — the big ones stuck behind the Connect-app-scope wall). Handler's `registerWebhook` would talk to Pipedream's Sources API instead of the upstream, and a Pipedream-delivered event would fan out to the facet.
+- **Scheduled-job primitive for rotatable webhook channels.** Services like Google Calendar, Drive, Sheets, Gmail, Airtable, and Dropbox issue webhook subscriptions with a hard TTL — renew-or-die. Needs a new supervisor-managed cron primitive (per-sync) that wakes up before expiry, invokes an agent-authored `rotateChannel(fetch, config)` export on the handler (analogous to `registerWebhook` / `unregisterWebhook`), and persists the new channel id + secret back into the sync row. Unlocks the entire family of "watch-channel" integrations — easily 5-10x the addressable surface on Google Workspace + cloud storage alone.
 - **Automated error recovery loop.** After N consecutive failures on a sync, queue a main-agent turn that reads `get_sync_errors`, proposes an `update_sync`, and surfaces for user approval. Architecture's there; it's a scheduler + a guarded budget.
 - **Two-phase claim-then-ack dedup.** Today's dedup pattern records the claim before the side effect runs — if the facet crashes mid-flight, the work is lost and the retry gets skipped. Fine for enrichment (a dropped triage comment), not fine for billing (a dropped charge). A pending-then-done pattern in the prompt would give must-deliver pipelines safe retries.
 - **Sync pause / resume.** Today `delete_sync` is the only way to stop a sync — and it also wipes the facet's SQLite and unregisters the upstream webhook. A proper pause would mute deliveries while keeping the historical rows and the webhook subscription intact, so resume is one click.
