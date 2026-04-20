@@ -11,9 +11,7 @@
 
 **Sync 1 — GitHub issue triage.** Prompt used verbatim:
 
-> *"Set up a GitHub sync on the repo `https://github.com/rtpa25/multi-container` that mirrors issues. I also want a lightweight auto-triage: whenever an issue is opened, use an LLM to suggest 1–3 likely labels from the repo's existing label set, assign them, and also post a comment on the issue (triage note — anything really). Keep it idempotent so reopens/edits don't spam comments."*
-
-
+> _"Set up a GitHub sync on the repo `https://github.com/rtpa25/multi-container` that mirrors issues. I also want a lightweight auto-triage: whenever an issue is opened, use an LLM to suggest 1–3 likely labels from the repo's existing label set, assign them, and also post a comment on the issue (triage note — anything really). Keep it idempotent so reopens/edits don't spam comments."_
 
 https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99
 
@@ -21,7 +19,7 @@ Exercises: probe-loop discovery of GitHub's webhook payload shape, agent-authore
 
 **Sync 2 — Linear → Slack cross-app triage.** Prompt used verbatim:
 
-> *"Set up a Linear sync that mirrors issues assigned to me at Urgent priority. When a new one lands, run an LLM triage pass (short bullet-point note: likely root cause, next step, clarifying questions) and post it as: a comment on the Linear issue, and a message in the Slack `#testing` channel with the issue details + the triage note."*
+> _"Set up a Linear sync that mirrors issues assigned to me at Urgent priority. When a new one lands, run an LLM triage pass (short bullet-point note: likely root cause, next step, clarifying questions) and post it as: a comment on the Linear issue, and a message in the Slack `#testing` channel with the issue details + the triage note."_
 
 https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac
 
@@ -33,9 +31,9 @@ Both handler sources + schemas are visible in the app's right-hand Ops panel, wh
 
 ## TL;DR
 
-Give the agent a prompt like *"track my urgent Linear issues assigned to me and triage them"*. It drafts the SQL schema, the webhook handler, the signature verifier, the registration code, and the egress allowlist. You approve. The webhook registers, the facet compiles, and from then on every Linear delivery flows through the agent-authored handler into the agent-designed SQLite — **with no LLM in the loop** until you come back with a question.
+Give the agent a prompt like _"track my urgent Linear issues assigned to me and triage them"_. It drafts the SQL schema, the webhook handler, the signature verifier, the registration code, and the egress allowlist. You approve. The webhook registers, the facet compiles, and from then on every Linear delivery flows through the agent-authored handler into the agent-designed SQLite — **with no LLM in the loop** until you come back with a question.
 
-The unusual bit: the agent owns the code *and* the schema. It's not an LLM sitting on top of an MCP. It's the LLM writing the thing the MCP would have wrapped.
+The unusual bit: the agent owns the code _and_ the schema. It's not an LLM sitting on top of an MCP. It's the LLM writing the thing the MCP would have wrapped.
 
 ---
 
@@ -44,7 +42,7 @@ The unusual bit: the agent owns the code *and* the schema. It's not an LLM sitti
 I've built sync systems like this manually a handful of times. The workflow always looks the same:
 
 1. Pick the integration. Read its webhook docs.
-2. Figure out the signing scheme (HMAC-hex? sha256=?  URL challenge?).
+2. Figure out the signing scheme (HMAC-hex? sha256=? URL challenge?).
 3. Sketch a schema for the rows I want to keep.
 4. Write the handler: parse payload, normalize, UPSERT.
 5. Register the webhook against the upstream's API.
@@ -63,13 +61,11 @@ The consequence falls out cleanly: once a sync is live, the ingestion path is ju
 
 Reference this when reading any of the code. The agent only runs in phases 1 and 3.
 
-
 | Phase               | Agent runs? | LLM cost? | What happens                                                                                                             |
 | ------------------- | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------ |
 | **1. Setup**        | Yes         | Yes       | User describes a sync → agent drafts schema + handler + egress list → user approves → facet compiles, webhook registers. |
 | **2. Steady state** | **No**      | **No**    | Upstream fires webhook → supervisor verifies signature → facet handler runs → row lands in the facet's SQLite.           |
 | **3. Query**        | Yes         | Yes       | User asks a question → agent runs SELECT against the facet → reads rows → answers.                                       |
-
 
 This is the whole point of the architecture. Phase 2 is where the volume lives, and phase 2 is free.
 
@@ -101,8 +97,6 @@ flowchart LR
     Up -- webhook POST /webhook/:userId/:syncId --> Worker
 ```
 
-
-
 **One Durable Object per user.** The DO plays three roles: chat agent (conversation state), supervisor (sync registry + signing secrets), and facet orchestrator (attaches, dispatches, manages N facets per user — one per sync).
 
 **One facet per sync.** Each facet has its own isolated SQLite, its own V8 isolate, and `globalOutbound: HttpGateway(...)`. The facet cannot read the supervisor's storage and cannot reach the network except through the gateway.
@@ -115,7 +109,6 @@ flowchart LR
 
 Nine tools, grouped:
 
-
 | Tool                                        | Purpose                                                                                       |
 | ------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `list_syncs`, `get_sync`, `get_sync_errors` | Inspect what exists and what's failing.                                                       |
@@ -126,7 +119,6 @@ Nine tools, grouped:
 | `run_in_sync`                               | One-shot code inside a facet — backfill, diagnostics, triggering test events. Approval-gated. |
 | `delete_sync`                               | Unregister upstream webhook, drop the facet, delete the registry row. Approval-gated.         |
 
-
 **Inside handlers**, the agent's authored code gets a third primitive: `ctx.agent({ model, system, messages })` — a ReAct sub-agent runner that can reason about a single delivery, write back via the same `sql` tool, call out via the same credential-injecting `fetch`, or even spawn further code isolates via an `exec` tool. This is the "webhook callback spawns an agent" ask from the spec, live.
 
 Full tool contracts live in `src/agent/tools/*/` and `src/agent-runtime/llm-gateway.ts`. The system prompt that orchestrates them is in `src/agent/system-prompt.ts`.
@@ -136,7 +128,6 @@ Full tool contracts live in `src/agent/tools/*/` and `src/agent-runtime/llm-gate
 ## Security model — what the agent can and cannot do
 
 These invariants are demonstrable, not aspirational. Each has a single mechanism enforcing it, named inline.
-
 
 | Invariant                                                                                                                      | Mechanism                                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -150,8 +141,7 @@ These invariants are demonstrable, not aspirational. Each has a single mechanism
 | **Agent cannot write without approval.**                                                                                       | `create_sync`, `update_sync`, `run_in_sync`, `delete_sync` all use Agents SDK `needsApproval`. User sees the full generated code + schema + egress allowlist in the UI before anything runs. |
 | **Only authenticated users can reach the app.**                                                                                | Cloudflare Access with one-time-PIN IdP in front of the whole origin. No unauthenticated route exists.                                                                                       |
 
-
-**Accepted residual:** `X-Pd-App` is agent-set, and the agent's handler code runs on attacker-controlled webhook payloads. An attacker can't exfiltrate to undeclared hosts (the `api_hosts` gate is pre-attacker), but could route a declared host through the *wrong* connected app's credentials. Damage ceiling: a wrong-audience Bearer token rejected at the real target. No token or user data reaches attacker infrastructure. This is the tradeoff for cross-app flexibility (a Linear sync handler *can* post to Slack if the user approved both).
+**Accepted residual:** `X-Pd-App` is agent-set, and the agent's handler code runs on attacker-controlled webhook payloads. An attacker can't exfiltrate to undeclared hosts (the `api_hosts` gate is pre-attacker), but could route a declared host through the _wrong_ connected app's credentials. Damage ceiling: a wrong-audience Bearer token rejected at the real target. No token or user data reaches attacker infrastructure. This is the tradeoff for cross-app flexibility (a Linear sync handler _can_ post to Slack if the user approved both).
 
 ---
 
@@ -225,9 +215,9 @@ Full "Considered and Rejected" records for every phase live in each plan file un
 
 ## Limitations
 
-- **Slack, Notion, Zoom, MS Teams** cannot self-register webhooks — their OAuth apps are scoped to Pipedream's own Connect app, and the webhook URL is fixed there. Pattern needs a Pipedream Sources integration (see "what I'd do next"). Linear, GitHub, Stripe, Shopify, Jira, GitLab, Asana, Calendly, PagerDuty, Zendesk, Intercom, and many more *do* expose programmable webhook APIs and work today.
+- **Slack, Notion, Zoom, MS Teams** cannot self-register webhooks — their OAuth apps are scoped to Pipedream's own Connect app, and the webhook URL is fixed there. Pattern needs a Pipedream Sources integration (see "what I'd do next"). Linear, GitHub, Stripe, Shopify, Jira, GitLab, Asana, Calendly, PagerDuty, Zendesk, Intercom, and many more _do_ expose programmable webhook APIs and work today.
 - **Parallel `ctx.agent` calls inside a handler throw.** The primitive guards against nesting to keep semantics simple.
-- `**AI_MissingToolResultsError` fires intermittently** when the main agent makes parallel tool calls — a known AI SDK interaction with the approval-gated flow. Retry the message; no data loss.
+- `**AI_MissingToolResultsError` fires intermittently\*\* when the main agent makes parallel tool calls — a known AI SDK interaction with the approval-gated flow. Retry the message; no data loss.
 - **No rate limiting.** Auth gate keeps this bounded for now; proper per-user token bucket is needed before wider exposure.
 - **No sync pause.** `delete_sync` + re-create to pause; preserving the local SQLite through a pause is future work.
 
