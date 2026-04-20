@@ -13,8 +13,9 @@
 
 > *"Set up a GitHub sync on the repo `https://github.com/rtpa25/multi-container` that mirrors issues. I also want a lightweight auto-triage: whenever an issue is opened, use an LLM to suggest 1–3 likely labels from the repo's existing label set, assign them, and also post a comment on the issue (triage note — anything really). Keep it idempotent so reopens/edits don't spam comments."*
 
-<!-- prettier-ignore -->
-https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac
+
+
+[https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac](https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac)
 
 Exercises: probe-loop discovery of GitHub's webhook payload shape, agent-authored HMAC-sha256 verifier, `GET /labels` → sub-agent picks top-3 → `POST /labels` + comment, dedup table keyed on issue id so reopens don't fire twice.
 
@@ -22,8 +23,9 @@ Exercises: probe-loop discovery of GitHub's webhook payload shape, agent-authore
 
 > *"Set up a Linear sync that mirrors issues assigned to me at Urgent priority. When a new one lands, run an LLM triage pass (short bullet-point note: likely root cause, next step, clarifying questions) and post it as: a comment on the Linear issue, and a message in the Slack `#testing` channel with the issue details + the triage note."*
 
-<!-- prettier-ignore -->
-https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99
+
+
+[https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99](https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99)
 
 Exercises: cross-app egress (`api_hosts: ["api.linear.app", "slack.com"]`, `X-Pd-App` flipped per fetch); agent-authored viewer-id resolution via `run_in_sync`; a `ctx.waitUntil`-wrapped sub-agent chain that fans out to TWO different upstreams after the Linear 200.
 
@@ -249,13 +251,13 @@ Full "Considered and Rejected" records for every phase live in each plan file un
 
 For reviewers who want the full decision trail:
 
-- **Assignment as given:** `[spec.md](./spec.md)`
-- **Architecture design spec:** `[docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md](./docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md)`
-- **All implementation plans** (22 files, each with a "Considered and Rejected" log): `[docs/superpowers/plans/](./docs/superpowers/plans/)`
-- **System prompt** (what the agent reads on every turn): `[src/agent/system-prompt.ts](./src/agent/system-prompt.ts)`
-- **Tool contracts** (what the agent invokes): `[src/agent/tools/](./src/agent/tools/)`
-- **HTTP gateway** — the single chokepoint where the security model is enforced (SSRF denylist, agent-declared `api_hosts`, Pipedream credential injection, per-fetch live lookup via DO RPC): `[src/proxy/http-gateway.ts](./src/proxy/http-gateway.ts)`
-- **Sub-agent primitive** (what handlers invoke): `[src/agent-runtime/llm-gateway.ts](./src/agent-runtime/llm-gateway.ts)`
+- **Assignment as given:** [`spec.md`](./spec.md)
+- **Architecture design spec:** [`docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md`](./docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md)
+- **All implementation plans** (22 files, each with a "Considered and Rejected" log): [`docs/superpowers/plans/`](./docs/superpowers/plans/)
+- **System prompt** (what the agent reads on every turn): [`src/agent/system-prompt.ts`](./src/agent/system-prompt.ts)
+- **Tool contracts** (what the agent invokes): [`src/agent/tools/`](./src/agent/tools/)
+- **HTTP gateway** — the single chokepoint where the security model is enforced (SSRF denylist, agent-declared `api_hosts`, Pipedream credential injection, per-fetch live lookup via DO RPC): [`src/proxy/http-gateway.ts`](./src/proxy/http-gateway.ts)
+- **Sub-agent primitive** (what handlers invoke): [`src/agent-runtime/llm-gateway.ts`](./src/agent-runtime/llm-gateway.ts)
 
 ---
 
