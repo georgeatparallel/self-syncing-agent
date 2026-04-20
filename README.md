@@ -188,9 +188,7 @@ pnpm deploy     # push to Cloudflare
 
 ## AI pair-programming notes
 
-Every line of this repo was written by pairing with Claude. The collaboration shape was: I drove architecture and judgment calls; Claude drove translation — specs into plans, plans into code, code into tests. The interesting parts to document are the moments where Claude's first drafts from training data broke against the actual runtime, and the moments where I pushed back on architectural defaults that wouldn't scale.
-
-**Models used.** Claude Opus 4.7 (1M context) as the planning + code-review brain, driven through Claude Code's subagent-driven-development workflow — brainstorm → spec → plan → implementer subagent per task → spec-compliance review → code-quality review. Claude Sonnet 4.6 as the product LLM inside the app itself. Claude Haiku 4.5 for cheap sub-agent calls (triage, classification).
+Every line of this repo was written by pairing with Claude. The collaboration shape was: I drove architecture and judgment calls; Claude drove translation — specs into plans, plans into code, code into tests. The interesting parts to document are the moments where Claude's first drafts from training data broke against the actual runtime, and the moments where I pushed back on architectural defaults that weren't pragmatic.
 
 **Where Claude's drafts held up.** Translating specs into implementation plans, writing tests alongside code, type-driven refactors, Hono routing, zod schemas, mermaid diagrams. When a contract was clear and well-documented, the first draft was usually correct.
 
