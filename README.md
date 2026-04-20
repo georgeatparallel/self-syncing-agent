@@ -3,7 +3,31 @@
 > An agent that writes its own webhook handlers and mirrors upstream data into isolated SQLite it owns — so steady-state ingestion runs without an LLM in the loop.
 
 **Live demo:** [https://sauna.ronit.one](https://sauna.ronit.one) (sign in with any email; Cloudflare Access sends a one-time PIN)
-**Loom walkthrough:** 
+**Loom walkthrough:**
+
+---
+
+## Two worked demos (the product, running)
+
+**Sync 1 — GitHub issue triage.** Prompt used verbatim:
+
+> *"Set up a GitHub sync on the repo `https://github.com/rtpa25/multi-container` that mirrors issues. I also want a lightweight auto-triage: whenever an issue is opened, use an LLM to suggest 1–3 likely labels from the repo's existing label set, assign them, and also post a comment on the issue (triage note — anything really). Keep it idempotent so reopens/edits don't spam comments."*
+
+<!-- prettier-ignore -->
+https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac
+
+Exercises: probe-loop discovery of GitHub's webhook payload shape, agent-authored HMAC-sha256 verifier, `GET /labels` → sub-agent picks top-3 → `POST /labels` + comment, dedup table keyed on issue id so reopens don't fire twice.
+
+**Sync 2 — Linear → Slack cross-app triage.** Prompt used verbatim:
+
+> *"Set up a Linear sync that mirrors issues assigned to me at Urgent priority. When a new one lands, run an LLM triage pass (short bullet-point note: likely root cause, next step, clarifying questions) and post it as: a comment on the Linear issue, and a message in the Slack `#testing` channel with the issue details + the triage note."*
+
+<!-- prettier-ignore -->
+https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99
+
+Exercises: cross-app egress (`api_hosts: ["api.linear.app", "slack.com"]`, `X-Pd-App` flipped per fetch); agent-authored viewer-id resolution via `run_in_sync`; a `ctx.waitUntil`-wrapped sub-agent chain that fans out to TWO different upstreams after the Linear 200.
+
+Both handler sources + schemas are visible in the app's right-hand Ops panel, which reads from `get_sync` RPC.
 
 ---
 
@@ -128,22 +152,6 @@ These invariants are demonstrable, not aspirational. Each has a single mechanism
 
 
 **Accepted residual:** `X-Pd-App` is agent-set, and the agent's handler code runs on attacker-controlled webhook payloads. An attacker can't exfiltrate to undeclared hosts (the `api_hosts` gate is pre-attacker), but could route a declared host through the *wrong* connected app's credentials. Damage ceiling: a wrong-audience Bearer token rejected at the real target. No token or user data reaches attacker infrastructure. This is the tradeoff for cross-app flexibility (a Linear sync handler *can* post to Slack if the user approved both).
-
----
-
-## Two worked demos
-
-**Linear → Slack cross-app triage.**
-Prompt: *"Track Linear issues and when one is assigned to me with urgent priority, spawn a sub-agent to triage it and post the summary to Slack."* The agent probes Linear's payload shape (Phase 1: raw-capture), observes a real event, refines the schema (Phase 3: structured columns), writes `verifySignature` against Linear's HMAC-hex scheme, writes `registerWebhook` using `webhookCreate`, derives the user's viewer ID via `run_in_sync` and hardcodes it into the filter. On urgent + assigned deliveries, a haiku sub-agent drafts a short triage note; a follow-up fetch posts it into Slack — cross-app flow through the `X-Pd-App` routing (`api_hosts: ["api.linear.app", "slack.com"]`).
-
-[https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99](https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99)
-
-**GitHub — issues mirror + auto-triage.**
-Same architecture, same primitives; different signing (`sha256=` prefix, caller-generated secret), different registration endpoint (`/repos/:o/:r/hooks`). Demonstrates that the pattern isn't Linear-specific — change the slug on `X-Pd-App`, change the `api_hosts` list, and the same handler shape works.
-
-[https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac](https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac)
-
-Both handler sources + schemas are visible live in the app's right-hand Ops panel, which reads from `get_sync` RPC.
 
 ---
 
