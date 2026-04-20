@@ -15,7 +15,7 @@
 
 
 
-[https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac](https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac)
+https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99
 
 Exercises: probe-loop discovery of GitHub's webhook payload shape, agent-authored HMAC-sha256 verifier, `GET /labels` → sub-agent picks top-3 → `POST /labels` + comment, dedup table keyed on issue id so reopens don't fire twice.
 
@@ -23,9 +23,7 @@ Exercises: probe-loop discovery of GitHub's webhook payload shape, agent-authore
 
 > *"Set up a Linear sync that mirrors issues assigned to me at Urgent priority. When a new one lands, run an LLM triage pass (short bullet-point note: likely root cause, next step, clarifying questions) and post it as: a comment on the Linear issue, and a message in the Slack `#testing` channel with the issue details + the triage note."*
 
-
-
-[https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99](https://github.com/user-attachments/assets/5f164142-b491-49da-a1e4-bb595bf70c99)
+https://github.com/user-attachments/assets/2a4275fa-6d65-474a-bb8c-4e8d142252ac
 
 Exercises: cross-app egress (`api_hosts: ["api.linear.app", "slack.com"]`, `X-Pd-App` flipped per fetch); agent-authored viewer-id resolution via `run_in_sync`; a `ctx.waitUntil`-wrapped sub-agent chain that fans out to TWO different upstreams after the Linear 200.
 
