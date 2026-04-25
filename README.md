@@ -2,8 +2,6 @@
 
 > An agent that writes its own webhook handlers and mirrors upstream data into isolated SQLite it owns — so steady-state ingestion runs without an LLM in the loop.
 
-**Live demo:** [https://sauna.ronit.one](https://sauna.ronit.one) (sign in with any email; Cloudflare Access sends a one-time PIN)
-
 **Loom walkthrough:** [https://www.loom.com/share/225bfa6a576b49298d17d26c0c258b4e](https://www.loom.com/share/225bfa6a576b49298d17d26c0c258b4e)
 
 ---
@@ -180,7 +178,7 @@ pnpm check      # type + test (206 tests)
 pnpm deploy     # push to Cloudflare
 ```
 
-**Production secrets** mirror `.dev.vars` one-for-one via `wrangler secret put <NAME>`. See the memory file `feedback_prod_secrets_parity.md` — dev and prod are not auto-synced.
+**Production secrets** mirror `.dev.vars` one-for-one via `wrangler secret put <NAME>`. Dev and prod are not auto-synced — every `.dev.vars` change needs a matching `wrangler secret put` or `wrangler secret delete`.
 
 **Auth** is fronted by Cloudflare Access. Configure a Self-Hosted application covering your worker's domain; Identity providers → enable One-Time PIN; Policy → Include = `Everyone` for open demo access, or `Emails` with a list for a restricted reviewer set.
 
@@ -192,7 +190,7 @@ Every line of this repo was written by pairing with Claude. The collaboration sh
 
 **Where Claude's drafts held up.** Translating specs into implementation plans, writing tests alongside code, type-driven refactors, Hono routing, zod schemas, mermaid diagrams. When a contract was clear and well-documented, the first draft was usually correct.
 
-**Where Claude's drafts broke on DO Facets specifically** — the explicit grading ask. Durable Object Facets + Worker Loader landed on Cloudflare's platform in early 2026. Training data is thin, and Claude confidently produced shapes that didn't match the actual runtime. Five concrete traps:
+**Where Claude's drafts broke on DO Facets specifically.** Durable Object Facets + Worker Loader landed on Cloudflare's platform in early 2026. Training data is thin, and Claude confidently produced shapes that didn't match the actual runtime. Five concrete traps:
 
 **1. Worker Loader's `codeId` is a cache key, not a label.**
 Claude's first `update_sync` draft reused the same `codeId` across versions, reasoning "the sync's identity hasn't changed, so the key shouldn't either." I caught it when a fixed handler kept serving the old bug. Reading Cloudflare's Dynamic Workers doc carefully showed `codeId` IS the platform's cache key — reusing it silently reuses compiled output. We landed on `sync:<syncId>:v<version>`, bumped on every update. Load-bearing rule of the whole update path.
@@ -233,7 +231,7 @@ Full "Considered and Rejected" records for every phase live in each plan file un
 
 ---
 
-## What I'd do with another week
+## What's next
 
 - **Pipedream Sources** for app-scoped integrations (unlocks Slack, Notion, Zoom, MS Graph — the big ones stuck behind the Connect-app-scope wall). Handler's `registerWebhook` would talk to Pipedream's Sources API instead of the upstream, and a Pipedream-delivered event would fan out to the facet.
 - **Scheduled-job primitive for rotatable webhook channels.** Services like Google Calendar, Drive, Sheets, Gmail, Airtable, and Dropbox issue webhook subscriptions with a hard TTL — renew-or-die. Needs a new supervisor-managed cron primitive (per-sync) that wakes up before expiry, invokes an agent-authored `rotateChannel(fetch, config)` export on the handler (analogous to `registerWebhook` / `unregisterWebhook`), and persists the new channel id + secret back into the sync row. Unlocks the entire family of "watch-channel" integrations — easily 5-10x the addressable surface on Google Workspace + cloud storage alone.
@@ -250,7 +248,6 @@ Full "Considered and Rejected" records for every phase live in each plan file un
 
 For reviewers who want the full decision trail:
 
-- **Assignment as given:** [`spec.md`](./spec.md)
 - **Architecture design spec:** [`docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md`](./docs/superpowers/specs/2026-04-17-self-syncing-agent-architecture-design.md)
 - **All implementation plans** (22 files, each with a "Considered and Rejected" log): [`docs/superpowers/plans/`](./docs/superpowers/plans/)
 - **System prompt** (what the agent reads on every turn): [`src/agent/system-prompt.ts`](./src/agent/system-prompt.ts)
